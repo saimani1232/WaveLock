@@ -1,0 +1,426 @@
+
+
+FINAL YEAR PROJECT
+PROJECT PLAN & TECHNICAL DOCUMENT
+Gesture-Based Biometric
+Authentication System
+Continuous Gesture Classification for Touchless Security
+
+Project Domain
+Computer Vision / Cybersecurity	Core Algorithm
+Dynamic Time Warping (DTW)
+Duration
+2 Semesters (1 Academic Year)	Technology Stack
+Python, React, Flask, MongoDB
+
+ 
+Table of Contents
+
+
+ 
+1. Project Overview
+This document provides the complete project plan, technical architecture, implementation strategy, and semester-wise timeline for the Final Year Project titled Gesture-Based Biometric Authentication System. The project is built around the topic of Continuous Gesture Classification and spans two academic semesters.
+The system replaces traditional passwords and PIN-based authentication with a fluid, continuous hand gesture captured through a standard webcam. The core intelligence of the system uses Dynamic Time Warping (DTW), a mathematical algorithm that compares the temporal flow and spatial trajectory of two gesture sequences, with zero reliance on deep learning or large training datasets.
+
+1.1  Project Identity
+Field	Details
+Project Title	Gesture-Based Biometric Authentication System
+Project Topic	Continuous Gesture Classification
+Project Type	Final Year Project (FYP)
+Duration	Two Semesters — One Full Academic Year
+Domain	Computer Vision, Cybersecurity, Full-Stack Development
+Core Algorithm	Dynamic Time Warping (DTW)
+Primary Language	Python (Backend), JavaScript (Frontend)
+Framework Stack	MediaPipe, Flask, React.js, MongoDB
+Hardware Required	Standard laptop/PC with webcam (no GPU needed)
+
+1.2  Project Abstract
+Traditional authentication systems rely on passwords, PINs, or biometrics such as fingerprints and facial recognition. These methods are vulnerable to theft, spoofing, and unauthorized replication. This project proposes a novel biometric authentication approach using continuous hand gesture recognition as a user credential.
+The system captures a user's unique hand movement through a webcam using Google MediaPipe, extracts 21 three-dimensional hand landmark coordinates per frame, and uses the Dynamic Time Warping algorithm to mathematically compare a live gesture attempt against a securely stored template. The entire comparison is deterministic, fast, and runs offline — making it ideal for local deployment on standard hardware.
+In the second semester, this core engine is wrapped in a production-grade full-stack web application with a React frontend, Flask REST API backend, JWT-based session management, and a MongoDB cloud database — delivering a complete, demo-ready security product.
+ 
+2. Problem Statement & Motivation
+2.1  Problem Statement
+Existing authentication systems face critical vulnerabilities. Passwords can be stolen, guessed, or leaked. Facial recognition can be spoofed with photographs. Fingerprint scanners require special hardware. None of these methods provide a truly touchless, hardware-free, continuous movement-based authentication mechanism.
+The challenge is to design a system where a user's authentication credential is a dynamic, continuous physical gesture — a movement that is unique to an individual in terms of speed, trajectory, and joint angles — and which cannot be replicated simply by knowing the gesture pattern. This is the core problem that this project solves.
+
+2.2  Motivation
+•	Passwords are responsible for over 80% of data breaches globally according to security reports.
+•	Touchless authentication is increasingly critical in healthcare, food industry, and public kiosks.
+•	Gesture-based systems are an emerging research area with very few production implementations.
+•	The DTW algorithm is mathematically proven and does not require neural networks or training data.
+•	A webcam is universally available — this system needs no special sensor hardware.
+
+2.3  Unique Selling Points
+What Makes This Project Stand Out
+No training data required — DTW compares gestures mathematically, not statistically
+No GPU needed — runs entirely on CPU, works on any laptop
+Truly continuous classification — classifies movement over time, not a single frame
+Full-stack implementation — from webcam input to secure web portal
+Zero external API dependency — fully offline-capable core engine
+ 
+3. Project Objectives
+3.1  Primary Objectives
+•	Build a real-time hand gesture capture engine using MediaPipe and OpenCV.
+•	Implement a DTW-based gesture comparison algorithm for continuous gesture classification.
+•	Develop a secure gesture template registration and storage system.
+•	Create a full-stack web application integrating gesture authentication with user management.
+•	Demonstrate a reliable, demo-ready system that works on standard hardware.
+
+3.2  Secondary Objectives
+•	Implement JWT-based secure session management for authenticated web access.
+•	Build an admin dashboard for monitoring user registrations and login history.
+•	Test the system with multiple users and varying lighting conditions for robustness.
+•	Document all code and produce a research paper-style project report.
+ 
+4. Technology Stack
+Every library and framework listed below is confirmed to be actively maintained, well-documented, and free to use. No paid APIs or services are required.
+
+4.1  Layer 1 — Hand Tracking (MediaPipe)
+Property	Details
+Library	MediaPipe by Google
+Purpose	Extracts 21 hand landmark coordinates (x, y, z) per frame in real time
+Why This	Pre-trained model, no dataset needed, runs on CPU, 30+ FPS
+Install Command	pip install mediapipe opencv-python
+Output	21 x 3 = 63 coordinate values updated every webcam frame
+
+4.2  Layer 2 — Gesture Algorithm (DTW)
+Property	Details
+Algorithm	Dynamic Time Warping (DTW)
+Library	fastdtw, dtaidistance, scipy
+Purpose	Compares a live gesture time-series against a stored template
+Why This	No model training, mathematical comparison, works with variable gesture speed
+Install Command	pip install fastdtw dtaidistance scipy numpy
+Output	A numerical distance score — lower score means closer match
+
+4.3  Layer 3 — Backend API (Flask)
+Property	Details
+Framework	Flask (Python)
+Extensions	Flask-SocketIO, Flask-JWT-Extended, Flask-CORS
+Purpose	REST API for register/login/verify endpoints + real-time socket stream
+Real-time	Flask-SocketIO enables live landmark streaming from browser to server
+Security	JWT tokens for secure, stateless user session management
+Install Command	pip install flask flask-socketio flask-jwt-extended flask-cors eventlet
+
+4.4  Layer 4 — Database (MongoDB)
+Property	Details
+Database	MongoDB (via MongoDB Atlas — free cloud tier)
+Python Driver	PyMongo
+Data Stored	User profiles, gesture templates (as JSON arrays), login history
+Why Atlas	Cloud-hosted, never goes offline, zero local setup — ideal for demos
+Install Command	pip install pymongo
+
+4.5  Layer 5 — Frontend (React.js)
+Property	Details
+Framework	React.js
+Key Libraries	Axios (API calls), socket.io-client (real-time), react-router-dom (routing)
+Pages	Register Page, Login Page, Dashboard Page, Admin Panel
+Real-time Feed	Browser webcam stream sent to Flask via Socket.IO
+Install Command	npx create-react-app gesture-auth && npm install axios socket.io-client react-router-dom
+
+4.6  Complete Dependency Reference
+Python Backend — Install All at Once
+pip install mediapipe opencv-python fastdtw dtaidistance scipy numpy
+pip install flask flask-socketio flask-jwt-extended flask-cors pymongo eventlet
+
+React Frontend — Install All at Once
+npx create-react-app gesture-auth
+cd gesture-auth
+npm install axios socket.io-client react-router-dom
+ 
+5. System Architecture
+5.1  High-Level Architecture
+The system is structured as a five-layer pipeline. Each layer is independent, testable, and replaceable, ensuring that a failure in one layer does not crash the entire system.
+
+Layer	Component	Technology	Function
+L1	Hand Tracking	MediaPipe + OpenCV	Captures 21 hand landmarks (x,y,z) per frame from webcam
+L2	Feature Extraction	NumPy + SciPy	Normalizes and resamples landmark time-series into fixed vectors
+L3	Classification Engine	DTW (fastdtw)	Compares live gesture against stored template, returns distance score
+L4	Backend API	Flask + SocketIO	Handles all REST endpoints and real-time WebSocket communication
+L5	Database	MongoDB Atlas	Stores user data, gesture templates, and authentication logs
+L6	Frontend UI	React.js	Provides the user-facing web interface for all interactions
+
+5.2  Data Flow — Registration
+Step	Action
+Step 1	User opens Register page in browser and enters username
+Step 2	Browser activates webcam — user performs their secret gesture
+Step 3	MediaPipe extracts 21 landmark coordinates from each frame
+Step 4	Landmark sequence (gesture template) is sent to Flask via Socket.IO
+Step 5	Flask normalizes and serializes the template as a NumPy array
+Step 6	Template is stored in MongoDB Atlas linked to the user's account
+Step 7	Success confirmation returned to the browser — registration complete
+
+5.3  Data Flow — Authentication
+Step	Action
+Step 1	User opens Login page and enters their username
+Step 2	Browser activates webcam — user performs their gesture again
+Step 3	MediaPipe extracts live landmark sequence
+Step 4	Live sequence is sent to Flask via Socket.IO
+Step 5	Flask retrieves stored template from MongoDB for that user
+Step 6	DTW computes distance score between live gesture and stored template
+Step 7	If distance <= threshold: JWT token issued — Access Granted
+Step 8	If distance > threshold: Request rejected — Access Denied
+Step 9	User redirected to Dashboard (on success) or shown error (on failure)
+
+5.4  DTW Algorithm Explained
+Dynamic Time Warping (DTW) is a well-established algorithm for measuring similarity between two temporal sequences that may vary in speed or timing. Unlike Euclidean distance, DTW can align sequences that are compressed or stretched in time.
+In this system, a gesture is recorded as a time-series T = [(x1,y1,z1), (x2,y2,z2), ..., (xn,yn,zn)]. When a user registers, this template T_stored is saved. At login, a new sequence T_live is captured. DTW computes the optimal alignment between T_stored and T_live and returns a numerical distance D.
+Decision Rule
+If D <= threshold  =>  GRANT ACCESS (gesture matches the registered template)
+If D > threshold   =>  DENY ACCESS (gesture does not match the stored template)
+
+The threshold value is tuned during testing by recording 20 genuine attempts and computing the 90th percentile DTW distance.
+ 
+SEMESTER 1  —  CORE GESTURE ENGINE
+
+6. Semester 1 — Detailed Plan
+6.1  Semester 1 Objective
+By the end of Semester 1, the team will have a fully functional, standalone Python application that can capture a hand gesture via webcam, store it as a template, and authenticate a new gesture attempt using the DTW algorithm. This will run as a terminal/Python script without any web interface. The semester focuses entirely on correctness and reliability of the core engine.
+
+6.2  Week-by-Week Timeline
+Week	Phase	Task	Deliverable
+1 – 2	Setup	Install Python, MediaPipe, OpenCV. Configure webcam. Run hand landmark demo.	Working MediaPipe script showing 21 landmarks on live webcam
+3 – 4	Capture	Build gesture recorder — capture N frames of a gesture, store as NumPy array.	gesture_record.py that saves a gesture template to disk as .npy file
+5 – 6	Algorithm	Implement DTW comparison using fastdtw. Compare two stored gestures.	Working DTW comparison script printing distance score
+7 – 8	Auth Logic	Build the threshold logic: record gesture 5 times, compute average DTW, set threshold.	gesture_auth.py that prints Access Granted or Access Denied
+9 – 10	Multi-User	Add user profiles — each user has a named folder with their gesture template.	System supports 3+ users each with their own gesture password
+11 – 12	Testing	Test with different lighting, gesture speeds, and multiple users. Tune threshold.	Test report with accuracy metrics (True Accept Rate vs False Accept Rate)
+
+6.3  Semester 1 Modules
+Module 1: gesture_capture.py
+•	Opens webcam using OpenCV
+•	Runs MediaPipe Hands solution to detect hand landmarks
+•	Records N frames (configurable — e.g., 90 frames = 3 seconds at 30fps)
+•	Stores the captured sequence as a NumPy array to disk (.npy format)
+•	Shows a countdown timer on the webcam preview window
+
+Module 2: gesture_compare.py
+•	Loads two gesture sequences from .npy files
+•	Normalizes sequences to a fixed length using linear interpolation
+•	Applies DTW using fastdtw.fastdtw() with Euclidean distance
+•	Returns the numerical distance score between the two sequences
+
+Module 3: gesture_auth.py
+•	Asks user for their username
+•	Loads that user's stored gesture template from disk
+•	Prompts user to perform their gesture live via webcam
+•	Calls gesture_compare.py to get DTW distance
+•	Prints: ACCESS GRANTED or ACCESS DENIED based on threshold
+
+6.4  Semester 1 Folder Structure
+Project Folder Layout — Semester 1
+gesture_auth_project/
+  |-- gesture_capture.py       (records a gesture and saves it)
+  |-- gesture_compare.py       (DTW comparison logic)
+  |-- gesture_auth.py          (main authentication script)
+  |-- utils/
+  |    |-- normalize.py        (sequence normalization helpers)
+  |    |-- landmarks.py        (MediaPipe extraction helpers)
+  |-- templates/
+  |    |-- alice/gesture.npy   (Alice's registered gesture)
+  |    |-- bob/gesture.npy     (Bob's registered gesture)
+  |-- tests/
+       |-- test_dtw.py         (unit tests for DTW logic)
+       |-- accuracy_report.py  (TAR/FAR computation script)
+
+6.5  Semester 1 Deliverables Checklist
+Deliverable	Status
+MediaPipe hand landmark extraction working in real time	Target by Week 2
+Gesture recording and template storage in .npy format	Target by Week 4
+DTW comparison algorithm returning correct distance scores	Target by Week 6
+Access Granted / Denied terminal output working	Target by Week 8
+Multi-user support (minimum 3 users)	Target by Week 10
+Accuracy testing report with TAR and FAR metrics	Target by Week 12
+ 
+SEMESTER 2  —  FULL-STACK WEB APPLICATION
+
+7. Semester 2 — Detailed Plan
+7.1  Semester 2 Objective
+Semester 2 wraps the Semester 1 core engine inside a production-quality full-stack web application. By the end of the semester, the system will be a fully functional web portal where users register with their gesture, log in via webcam, and access a secured dashboard — all running in a browser. An admin panel will track all login activity.
+
+7.2  Week-by-Week Timeline
+Week	Phase	Task	Deliverable
+1 – 2	Backend	Set up Flask app. Create /register, /login, /verify REST endpoints.	Flask server running with Postman-testable API endpoints
+3 – 4	Database	Connect MongoDB Atlas. Store user profiles and gesture templates as JSON.	Users and gesture templates persisted in cloud MongoDB
+5 – 6	Auth	Integrate Flask-JWT-Extended. Issue JWT on successful gesture match.	Protected routes that require valid JWT token to access
+7 – 8	Sockets	Add Flask-SocketIO. Stream live landmark data from browser to Flask.	Real-time landmark stream flowing from browser to Flask
+9 – 10	Frontend	Build React pages: Register, Login, Dashboard. Connect to Flask API.	Working web portal with all three pages functional
+11 – 12	Admin	Build Admin Panel: user list, login history, accept/reject log.	Complete admin view with analytics dashboard
+
+7.3  Semester 2 Modules
+Module 4: Flask REST API (app.py)
+•	POST /api/register — accepts username and gesture template, stores in MongoDB
+•	POST /api/login — accepts username and live gesture, runs DTW, returns JWT or error
+•	GET /api/dashboard — protected route, requires valid JWT
+•	GET /api/admin/users — returns all registered users (admin only)
+•	GET /api/admin/logs — returns all login attempt history
+
+Module 5: Socket.IO Real-Time Stream
+•	Browser captures webcam frames using HTML5 getUserMedia API
+•	Frames are sent to Flask via Socket.IO as base64-encoded images
+•	Flask decodes frames, passes through MediaPipe, emits landmarks back to browser
+•	Frontend displays live landmark overlay on the webcam feed
+
+Module 6: React Frontend
+•	Register Page — username input, webcam feed, record gesture button
+•	Login Page — username input, webcam feed, perform gesture button, result display
+•	Dashboard Page — welcome message, user info, logout button (JWT-protected)
+•	Admin Panel — table of all users, login logs with timestamps and pass/fail status
+
+7.4  Semester 2 Folder Structure
+Project Folder Layout — Semester 2
+gesture_auth_project/
+  |-- backend/
+  |    |-- app.py                  (Flask main application)
+  |    |-- routes/
+  |    |    |-- auth.py            (register and login endpoints)
+  |    |    |-- admin.py           (admin routes)
+  |    |-- core/
+  |    |    |-- gesture_compare.py (DTW engine from Semester 1)
+  |    |    |-- landmarks.py       (MediaPipe helpers)
+  |    |-- models/
+  |    |    |-- user.py            (MongoDB user model)
+  |    |    |-- log.py             (Login log model)
+  |    |-- .env                    (JWT secret, MongoDB URI)
+  |
+  |-- frontend/
+       |-- src/
+            |-- pages/
+            |    |-- Register.jsx
+            |    |-- Login.jsx
+            |    |-- Dashboard.jsx
+            |    |-- AdminPanel.jsx
+            |-- components/
+            |    |-- WebcamCapture.jsx
+            |    |-- GestureOverlay.jsx
+            |-- App.jsx
+            |-- index.js
+
+7.5  Semester 2 Deliverables Checklist
+Deliverable	Status
+Flask REST API with all endpoints working (tested via Postman)	Target by Week 2
+MongoDB Atlas connected — users and templates persisted	Target by Week 4
+JWT authentication working — protected routes secured	Target by Week 6
+Socket.IO real-time landmark streaming functional	Target by Week 8
+React frontend with Register, Login, Dashboard pages complete	Target by Week 10
+Admin panel showing user list and full login history	Target by Week 12
+ 
+8. Risk Management & Failure Prevention
+This section covers every known failure mode of this type of project and the exact mitigation strategy for each. Following these rules will ensure the project does not fail at the final demo.
+
+Risk	Likelihood	Impact	Mitigation Strategy
+DTW threshold too strict — genuine user rejected	Medium	High	Test 20 genuine attempts, set threshold at 90th percentile DTW distance
+Lighting changes affect MediaPipe detection	High	Medium	Demo in consistent room lighting. Have a fallback recorded video for demo.
+Webcam not found (VideoCapture fails)	Low	High	Always test cv2.VideoCapture(0) first. Keep a backup USB webcam on demo day.
+CORS errors between Flask and React	High	High	Install flask-cors and add CORS(app) on line 1 of app.py from day one.
+MongoDB connection drops during demo	Low	High	Use MongoDB Atlas (cloud). It does not go offline. Do not use local MongoDB.
+Socket.IO latency causing slow response	Medium	Medium	Use eventlet async mode. Cap frame rate to 15fps for landmark streaming.
+MediaPipe not detecting hand	Medium	Medium	Add on-screen message 'Hand not detected'. Use min_detection_confidence=0.6.
+React build errors on demo machine	Low	High	Always test npm run build and npm start before demo day. Deploy to Vercel as backup.
+
+Demo Day Golden Rules
+Rule 1: Always demo with MongoDB Atlas (cloud), never local MongoDB
+Rule 2: Run the gesture registration fresh before the demo — never use old templates
+Rule 3: Demo in the same room and lighting conditions you tested in
+Rule 4: Have a 60-second recorded screen recording backup ready in case of hardware failure
+Rule 5: Test the complete registration + login flow at least 10 times the day before
+ 
+9. Testing Strategy
+9.1  Gesture Engine Testing (Semester 1)
+Test Type	Method
+True Accept Rate (TAR)	Same user performs gesture 20 times. Count how many are accepted.
+False Reject Rate (FRR)	Same user performs gesture with slight variation. Count rejections.
+False Accept Rate (FAR)	Different user tries the registered gesture. Count how many pass.
+Speed Variation Test	Same user performs gesture at 50% speed and 150% speed. Check acceptance.
+Lighting Test	Re-test in bright, dim, and backlit conditions.
+Distance Test	Perform gesture at 30cm, 50cm, and 80cm from camera.
+
+9.2  Web Application Testing (Semester 2)
+Test Type	Method
+API Endpoint Testing	Test all endpoints using Postman with valid and invalid inputs.
+JWT Security Testing	Attempt to access protected routes without a token — must return 401.
+Multi-User Test	Register 5 different users, verify all can login independently.
+Session Expiry Test	Wait for JWT token to expire, verify dashboard returns unauthorized.
+Browser Compatibility	Test on Chrome, Firefox, and Edge.
+Concurrent User Test	Two users attempt login simultaneously — verify no cross-user data.
+ 
+10. Full Year Timeline Summary
+Month	Semester	Focus	Key Milestone
+Month 1	S1	Setup & Capture	MediaPipe running, gesture recorder working
+Month 2	S1	DTW Engine	DTW comparison working, threshold tuned
+Month 3	S1	Auth Logic & Testing	Terminal-based auth complete, accuracy tested
+Month 4	S2	Flask Backend	All API endpoints working, Postman verified
+Month 5	S2	Database & Auth	MongoDB connected, JWT tokens working
+Month 6	S2	Frontend & Demo	Full React web app, admin panel, demo-ready
+ 
+11. Expected Outcomes
+11.1  Technical Outcomes
+•	A gesture capture and template storage system using MediaPipe with no training data required.
+•	A DTW-based continuous gesture classifier with tuned threshold achieving above 85% True Accept Rate.
+•	A Flask REST API with JWT authentication and MongoDB persistence.
+•	A React web application with real-time webcam gesture authentication.
+•	An admin dashboard with full login history and analytics.
+
+11.2  Academic Outcomes
+•	A research paper-format project report covering literature review, methodology, results, and future work.
+•	Source code repository hosted on GitHub with full documentation.
+•	A live demo presentation demonstrating end-to-end gesture registration and authentication.
+•	A poster presentation summarizing the project for the project fair.
+
+Success Definition
+The project is considered fully successful when a fresh user can:
+1. Open the web application in a browser
+2. Register their hand gesture as their password
+3. Close and reopen the application
+4. Log back in using only their hand gesture
+5. Access their secured dashboard — all within 60 seconds
+ 
+12. References & Resources
+Resource	Link / Reference
+MediaPipe Hands Documentation	developers.google.com/mediapipe/solutions/vision/gesture_recognizer/python
+FastDTW Python Library	github.com/slaypni/fastdtw
+DTW-Python (Full DTW Suite)	pypi.org/project/dtw-python
+Flask Official Documentation	flask.palletsprojects.com
+Flask-SocketIO Documentation	flask-socketio.readthedocs.io
+Flask-JWT-Extended Documentation	flask-jwt-extended.readthedocs.io
+MongoDB Atlas Free Tier	mongodb.com/atlas
+React.js Documentation	react.dev
+Socket.IO Client (npm)	npmjs.com/package/socket.io-client
+DTW Research Paper	Salvador & Chan, FastDTW: Toward Accurate Dynamic Time Warping in Linear Time, 2007
+MediaPipe Research	Lugaresi et al., MediaPipe: A Framework for Perceiving and Processing Reality, CVPR 2019
+
+This is an exceptionally well-structured and highly professional project plan. The architecture is modular, the fallback strategies are realistic, and splitting the core algorithmic work (Semester 1) from the full-stack web integration (Semester 2) is the exact right way to guarantee you have a working demo at the end of the year.
+
+You are absolutely cleared to proceed with implementation. However, looking at this from a strict system-design and computer vision perspective, there are **three hidden technical pitfalls** in the design that you need to patch during the coding phase to prevent the DTW algorithm from failing.
+
+### 1. The Spatial Scale & Origin Problem (Critical)
+
+The document states that the system captures 21 `(x, y, z)` coordinates per frame and normalizes the sequence to a fixed length.
+
+**The Issue:** Sequence length normalization fixes the *time* dimension, but it ignores the *spatial* dimension. If you register your gesture sitting 2 feet away from the webcam, your hand will produce a specific set of `(x, y)` coordinates. If you try to log in the next day sitting 3 feet away, the hand will appear smaller in the frame, and the raw coordinates will be completely different. DTW will read this as a massive mathematical error and lock you out, even if the gesture shape was perfect.
+
+**The Fix:** Before saving the NumPy array to disk, you must apply **Spatial Normalization**.
+
+1. Choose a root node (like the wrist, landmark 0).
+2. Subtract the wrist's `(x, y, z)` from all other 20 landmarks in that frame so the wrist is always at `(0, 0, 0)` regardless of where the hand is on the screen.
+3. Calculate the bounding box of the hand and scale all coordinates so the hand size is uniformly 1.0.
+
+### 2. The "Start/Stop" Temporal Window Problem
+
+Module 1 mentions recording a fixed `N` frames (e.g., 90 frames = 3 seconds) for the gesture.
+
+**The Issue:** Humans are not perfectly precise machines. What if you start your gesture at second 1, but the 3-second recording window cuts off the last half-second of your movement? DTW is great at handling *speed* variations, but if the two arrays represent different *chunks* of the movement (one complete gesture vs. one chopped-off gesture), the distance score will explode, leading to a False Rejection.
+
+**The Fix:** Do not rely on a blind 3-second timer. Implement a dynamic trigger in your Python script. For example, the recording only starts when the user holds up a specific static sign (like an open palm or a pinch) and stops when the hand leaves the frame or forms a fist. This guarantees you are capturing the *entire* gesture trajectory from start to finish every time.
+
+### 3. The Socket.IO Bandwidth Trap (Semester 2)
+
+In Semester 2, the plan states that the browser will send frames to Flask via Socket.IO as base64-encoded images , and Flask will run MediaPipe.
+
+**The Issue:** Sending 30 raw, base64-encoded webcam images per second over a WebSocket to a Flask backend will consume massive bandwidth and cause severe latency. If the network lags, the frames arrive out of order, and your continuous time-series data gets corrupted before DTW even sees it.
+
+**The Fix:** Flip the processing layer. Run MediaPipe directly inside the user's browser using JavaScript (MediaPipe offers a very lightweight JS library). Instead of streaming heavy video frames to the backend, the browser extracts the 21 `(x, y, z)` coordinates and sends *only* the lightweight JSON array of numbers to the Flask API. This cuts your data payload by 99% and completely eliminates latency risks for your demo.
+
+---
+
+— End of Project Plan Document —
