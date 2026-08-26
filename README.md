@@ -11,18 +11,20 @@ The current implementation is a Python desktop prototype built with OpenCV, Medi
 - Spatial normalization to reduce sensitivity to hand position, distance, and hand size.
 - Temporal normalization to resample gestures to a consistent frame count.
 - Multi-sample registration for stronger matching across natural user variation.
-- Per-user threshold calibration based on pairwise DTW distances.
+- Per-user statistical threshold calibration based on pairwise DTW distances.
+- Finger-state sequence checking to reject similar motions made with the wrong fingers.
 - Live authentication with an OpenCV status overlay and access result.
 - Standalone comparison mode for inspecting saved registrations.
 
 ## How It Works
 
-1. `gesture_capture.py` records three samples of the same gesture for a user.
+1. `gesture_capture.py` records five samples of the same gesture for a user.
 2. Each frame is converted into a `(21, 3)` landmark array.
 3. `utils/normalize.py` normalizes every frame spatially and resamples the whole gesture to 60 frames.
-4. `gesture_compare.py` computes DTW distances between registration samples and derives a per-user threshold.
-5. `gesture_auth.py` captures a live gesture and compares it against every stored sample.
-6. Access is granted when the best DTW distance is less than or equal to the user's threshold.
+4. `gesture_compare.py` computes DTW distances between registration samples and derives a robust per-user threshold from mean, standard deviation, percentile, and capped max-distance margins.
+5. A second per-user finger-state threshold is calibrated from the same samples.
+6. `gesture_auth.py` captures a live gesture and compares it against every stored sample.
+7. Access is granted only when both the DTW distance and finger-state mismatch pass their thresholds.
 
 ## Project Structure
 
@@ -90,7 +92,7 @@ During registration:
 - Enter a username.
 - Show your hand to the webcam.
 - Press `R` to record each sample.
-- Repeat the same gesture for all three samples.
+- Repeat the same gesture for all five samples.
 - Press `Q` to quit.
 
 Authenticate with a saved gesture:
@@ -128,10 +130,16 @@ CAMERA_HEIGHT = 480
 Matching settings live near the top of `gesture_compare.py`:
 
 ```python
-NUM_REGISTRATION_SAMPLES = 3
+NUM_REGISTRATION_SAMPLES = 5
 DEFAULT_THRESHOLD = 5.0
 MIN_THRESHOLD = 2.0
 THRESHOLD_MULTIPLIER = 1.5
+THRESHOLD_STD_FACTOR = 2.0
+THRESHOLD_PERCENTILE = 90
+THRESHOLD_SAFETY_MARGIN = 1.15
+THRESHOLD_MAX_MARGIN = 1.25
+DEFAULT_FINGER_STATE_THRESHOLD = 0.28
+MAX_FINGER_STATE_THRESHOLD = 0.30
 ```
 
 ## Privacy Note
@@ -142,8 +150,9 @@ Gesture templates are generated under `gesture_auth_project/templates/`. These f
 
 - If the webcam does not open, close other apps using the camera and check `CAMERA_INDEX`.
 - If no hand is detected, improve lighting and keep your full hand visible in the frame.
-- If authentication is too strict, re-register with three consistent samples or tune `THRESHOLD_MULTIPLIER`.
-- If authentication is too loose, lower `THRESHOLD_MULTIPLIER` or record a more distinctive gesture.
+- If authentication is too strict, re-register with five consistent samples or tune `THRESHOLD_STD_FACTOR` / `THRESHOLD_SAFETY_MARGIN`.
+- If authentication is too loose, lower `THRESHOLD_SAFETY_MARGIN` / `THRESHOLD_MAX_MARGIN` or record a more distinctive gesture.
+- If similar movements with different fingers are accepted, check the terminal's `Finger mismatch` value and lower `MAX_FINGER_STATE_THRESHOLD`.
 
 ## Roadmap
 

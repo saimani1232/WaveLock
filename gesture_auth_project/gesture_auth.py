@@ -29,7 +29,10 @@ from utils.normalize import normalize_gesture
 from gesture_compare import (
     load_all_user_templates,
     load_user_threshold,
-    authenticate,
+    load_user_finger_state_threshold,
+    load_user_transition_threshold,
+    load_user_segment_threshold,
+    authenticate_with_details,
     list_registered_users,
 )
 from gesture_capture import (
@@ -66,7 +69,10 @@ def draw_auth_instructions(frame):
     )
 
 
-def draw_result_overlay(frame, granted, distance, threshold):
+def draw_result_overlay(frame, granted, distance, threshold,
+                        finger_mismatch=None, finger_threshold=None,
+                        transition_dissim=None, transition_threshold=None,
+                        segment_max=None, segment_threshold_val=None):
     """
     Draw the authentication result as a large overlay on the frame.
     ACCESS GRANTED = green overlay, ACCESS DENIED = red overlay.
@@ -89,7 +95,7 @@ def draw_result_overlay(frame, granted, distance, threshold):
         main_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3
     )[0]
     text_x = (w - text_size[0]) // 2
-    text_y = (h // 2) - 30
+    text_y = (h // 2) - 50
 
     # Shadow + text
     cv2.putText(
@@ -101,16 +107,34 @@ def draw_result_overlay(frame, granted, distance, threshold):
         cv2.FONT_HERSHEY_SIMPLEX, 1.5, main_color, 3, cv2.LINE_AA
     )
 
-    # Distance info
-    info_text = f"Distance: {distance:.2f}  |  Threshold: {threshold:.2f}"
+    # Line 1: DTW distance and finger-state info
+    info_text = f"DTW: {distance:.2f}/{threshold:.2f}"
+    if finger_mismatch is not None and finger_threshold is not None:
+        info_text += (f"  |  Fingers: {finger_mismatch:.0%}/"
+                      f"{finger_threshold:.0%}")
     info_size = cv2.getTextSize(
-        info_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+        info_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
     )[0]
     info_x = (w - info_size[0]) // 2
     cv2.putText(
-        frame, info_text, (info_x, text_y + 50),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 2, cv2.LINE_AA
+        frame, info_text, (info_x, text_y + 45),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA
     )
+
+    # Line 2: Transition order and segment info
+    if transition_dissim is not None and transition_threshold is not None:
+        line2 = (f"Order: {transition_dissim:.0%}/{transition_threshold:.0%}")
+        if segment_max is not None and segment_threshold_val is not None:
+            line2 += (f"  |  Segment: {segment_max:.0%}/"
+                      f"{segment_threshold_val:.0%}")
+        line2_size = cv2.getTextSize(
+            line2, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+        )[0]
+        line2_x = (w - line2_size[0]) // 2
+        cv2.putText(
+            frame, line2, (line2_x, text_y + 70),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA
+        )
 
     # Retry instruction
     retry_text = "Press [T] to try again  |  Press [Q] to quit"
@@ -119,7 +143,7 @@ def draw_result_overlay(frame, granted, distance, threshold):
     )[0]
     retry_x = (w - retry_size[0]) // 2
     cv2.putText(
-        frame, retry_text, (retry_x, text_y + 90),
+        frame, retry_text, (retry_x, text_y + 110),
         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1, cv2.LINE_AA
     )
 
@@ -185,8 +209,14 @@ def main():
     try:
         stored_templates = load_all_user_templates(username)
         threshold = load_user_threshold(username)
+        finger_state_threshold = load_user_finger_state_threshold(username)
+        transition_threshold = load_user_transition_threshold(username)
+        segment_threshold = load_user_segment_threshold(username)
         print(f"  Loaded {len(stored_templates)} template(s) for '{username}'")
         print(f"  Authentication threshold: {threshold:.4f}")
+        print(f"  Finger mismatch limit:    {finger_state_threshold:.4f}")
+        print(f"  Transition order limit:   {transition_threshold:.4f}")
+        print(f"  Segment mismatch limit:   {segment_threshold:.4f}")
     except FileNotFoundError as e:
         print(f"  ERROR: {e}")
         return
@@ -215,6 +245,9 @@ def main():
     show_result = False
     result_granted = False
     result_distance = 0.0
+    result_finger_mismatch = 0.0
+    result_transition_dissim = 0.0
+    result_segment_max = 0.0
     result_frame = None
 
     # ─── Main Loop ────────────────────────────────────────────────────
@@ -232,7 +265,10 @@ def main():
                 display = result_frame.copy()
                 draw_result_overlay(
                     display, result_granted,
-                    result_distance, threshold
+                    result_distance, threshold,
+                    result_finger_mismatch, finger_state_threshold,
+                    result_transition_dissim, transition_threshold,
+                    result_segment_max, segment_threshold
                 )
                 cv2.imshow(WINDOW_NAME, display)
 
@@ -301,10 +337,21 @@ def main():
                         print(f"  Comparing against "
                               f"{len(stored_templates)} template(s)...")
 
-                        result_granted, result_distance, best_idx = \
-                            authenticate(
-                                normalized, stored_templates, threshold
-                            )
+                        (result_granted, result_distance, best_idx,
+                         auth_details) = authenticate_with_details(
+                            normalized,
+                            stored_templates,
+                            threshold,
+                            finger_state_threshold,
+                            transition_threshold,
+                            segment_threshold,
+                        )
+                        result_finger_mismatch = \
+                            auth_details["finger_state_mismatch"]
+                        result_transition_dissim = \
+                            auth_details["transition_dissimilarity"]
+                        result_segment_max = \
+                            auth_details["segment_max_mismatch"]
 
                         # Terminal output
                         if result_granted:
@@ -321,6 +368,21 @@ def main():
                         print(f"  DTW Distance:    {result_distance:.4f}"
                               f"  (best match: sample {best_idx + 1})")
                         print(f"  Threshold:       {threshold:.4f}")
+                        print(f"  Finger mismatch: "
+                              f"{result_finger_mismatch:.4f}")
+                        print(f"  Finger limit:    "
+                              f"{finger_state_threshold:.4f}")
+                        print(f"  Transition diff: "
+                              f"{result_transition_dissim:.4f}")
+                        print(f"  Transition limit:"
+                              f" {transition_threshold:.4f}")
+                        print(f"  Segment max:     "
+                              f"{result_segment_max:.4f}")
+                        print(f"  Segment limit:   "
+                              f"{segment_threshold:.4f}")
+                        if not result_granted:
+                            print(f"  Reject reason:   "
+                                  f"{auth_details['failure_reason']}")
                         print(f"  Frames captured: {len(recorded_frames)}")
                         print()
                         print("  Press [T] to try again, [Q] to quit.")

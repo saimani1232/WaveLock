@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WaveLock — Project Guide</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface-hover: #1c2333;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79c0ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --orange: #d29922;
+            --purple: #bc8cff;
+            --cyan: #39d2c0;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* ─── Hero ─── */
+        .hero {
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 40%, #1a1e2e 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 60px 20px 50px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%; left: -50%;
+            width: 200%; height: 200%;
+            background: radial-gradient(circle at 30% 50%, rgba(88,166,255,0.05) 0%, transparent 60%),
+                        radial-gradient(circle at 70% 30%, rgba(188,140,255,0.04) 0%, transparent 50%);
+            pointer-events: none;
+        }
+        .hero h1 { font-size: 3rem; font-weight: 800; margin-bottom: 10px; position: relative; }
+        .hero h1 .emoji { font-size: 2.6rem; }
+        .hero .subtitle { color: var(--text-muted); font-size: 1.15rem; position: relative; }
+        .hero .badge {
+            display: inline-block; margin-top: 18px;
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 6px 16px; border-radius: 20px;
+            font-size: 0.85rem; color: var(--accent);
+            position: relative;
+        }
+
+        /* ─── Layout ─── */
+        .layout { display: flex; max-width: 1400px; margin: 0 auto; }
+
+        /* ─── Sidebar ─── */
+        .sidebar {
+            width: 280px; min-width: 280px;
+            position: sticky; top: 0; height: 100vh;
+            overflow-y: auto; padding: 24px 16px;
+            border-right: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .sidebar h3 { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.2px; margin: 20px 0 8px; }
+        .sidebar a {
+            display: block; padding: 6px 12px; border-radius: 6px;
+            color: var(--text-muted); text-decoration: none; font-size: 0.88rem;
+            transition: all 0.15s;
+        }
+        .sidebar a:hover { background: var(--surface-hover); color: var(--text); }
+        .sidebar .icon { margin-right: 8px; font-size: 1.1em; vertical-align: middle; }
+
+        /* ─── Main Content ─── */
+        .content {
+            flex: 1; padding: 40px 60px; max-width: 1000px;
+        }
+
+        h2 {
+            font-size: 1.8rem; font-weight: 700;
+            margin: 60px 0 20px; padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; gap: 12px;
+        }
+        h2 .emoji { font-size: 1.5rem; }
+        
+        h3 { font-size: 1.3rem; margin: 30px 0 12px; color: var(--accent); }
+        h4 { font-size: 1.1rem; margin: 20px 0 8px; color: var(--text); }
+
+        p { margin: 12px 0 16px; }
+
+        /* ─── Feature Grid ─── */
+        .feature-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px; margin: 24px 0;
+        }
+        .feature-card {
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 20px; border-radius: 12px;
+            transition: border-color 0.2s, transform 0.2s;
+        }
+        .feature-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+        .feature-card .icon { font-size: 1.8rem; margin-bottom: 12px; display: block; }
+        .feature-card h4 { margin: 0 0 8px; color: var(--text); }
+        .feature-card p { margin: 0; font-size: 0.9rem; color: var(--text-muted); }
+
+        /* ─── Code Blocks ─── */
+        pre {
+            background: #0d1117; border: 1px solid var(--border);
+            border-radius: 8px; padding: 16px 20px;
+            overflow-x: auto; font-size: 0.88rem;
+            line-height: 1.5; margin: 16px 0;
+            font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
+        }
+        code {
+            font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
+            font-size: 0.9em;
+        }
+        p code, li code, td code {
+            background: rgba(88,166,255,0.1); color: var(--accent);
+            padding: 2px 6px; border-radius: 4px;
+        }
+
+        /* ─── Tables ─── */
+        table {
+            width: 100%; border-collapse: collapse;
+            margin: 20px 0; font-size: 0.95rem;
+        }
+        th {
+            background: var(--surface); padding: 12px 16px;
+            text-align: left; font-weight: 600; border-bottom: 2px solid var(--border);
+        }
+        td {
+            padding: 12px 16px; border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        tr:hover td { background: var(--surface-hover); }
+
+        /* ─── File Tree ─── */
+        .file-tree {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; padding: 20px; margin: 20px 0;
+            font-family: 'Fira Code', monospace; font-size: 0.9rem; line-height: 1.6;
+        }
+        .file-tree .dir { color: var(--accent); font-weight: 600; }
+        .file-tree .file { color: var(--text); }
+        .file-tree .comment { color: var(--text-muted); font-style: italic; margin-left: 12px; }
+
+        /* ─── Architecture Diagram ─── */
+        .diagram-container {
+            background: white; padding: 20px; border-radius: 12px;
+            margin: 24px 0; text-align: center; overflow-x: auto;
+        }
+        
+        /* ─── Alert Boxes ─── */
+        .alert {
+            border-radius: 8px; padding: 16px 20px;
+            margin: 20px 0; border-left: 4px solid;
+        }
+        .alert-info { background: rgba(88,166,255,0.08); border-color: var(--accent); }
+        .alert-success { background: rgba(63,185,80,0.08); border-color: var(--green); }
+        .alert-warning { background: rgba(210,153,34,0.08); border-color: var(--orange); }
+        .alert-title { font-weight: 700; margin-bottom: 6px; }
+        .alert-info .alert-title { color: var(--accent); }
+        .alert-success .alert-title { color: var(--green); }
+        .alert-warning .alert-title { color: var(--orange); }
+
+        ul, ol { margin: 12px 0 16px 24px; }
+        li { margin: 6px 0; }
+
+        @media (max-width: 900px) {
+            .sidebar { display: none; }
+            .content { padding: 30px 20px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <h1><span class="emoji">🔐</span> WaveLock</h1>
+    <div class="subtitle">Gesture-Based Biometric Authentication System</div>
+    <span class="badge">Complete Project Guide & Documentation</span>
+</div>
+
+<div class="layout">
+    <nav class="sidebar">
+        <h3>Contents</h3>
+        <a href="#overview"><span class="icon">📖</span> Project Overview</a>
+        <a href="#architecture"><span class="icon">🏗️</span> Architecture</a>
+        <a href="#gates"><span class="icon">🛡️</span> 4-Gate Security</a>
+        <a href="#structure"><span class="icon">📁</span> Directory Structure</a>
+        <a href="#modules"><span class="icon">🧩</span> Core Modules</a>
+        <a href="#config"><span class="icon">⚙️</span> Configuration</a>
+        <a href="#setup"><span class="icon">🚀</span> Setup & Usage</a>
+    </nav>
+
+    <main class="content">
+
+        <!-- 1. OVERVIEW -->
+        <h2 id="overview"><span class="emoji">📖</span> 1. Project Overview</h2>
+        
+        <p><strong>WaveLock</strong> is a real-time, webcam-based biometric authentication system that uses <strong>hand gesture recognition</strong> as a password. Instead of typing a password, users register a unique hand gesture (e.g., a wave, a sequential finger pattern like "1-2-4-3", or a custom movement) and authenticate by performing that same gesture live on camera.</p>
+
+        <p>The system uses <strong>MediaPipe</strong> for real-time hand tracking, extracts <strong>21 hand landmarks</strong> per frame, applies strict spatial and temporal normalization, and evaluates gestures using a robust <strong>4-Gate Security Architecture</strong>.</p>
+
+        <div class="feature-grid">
+            <div class="feature-card">
+                <span class="icon">🖐️</span>
+                <h4>Real-time Tracking</h4>
+                <p>MediaPipe detects 21 3D landmarks per hand at webcam speed (~30 FPS).</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon">📝</span>
+                <h4>Multi-sample Registration</h4>
+                <p>Records 5 gesture samples to capture natural variation and create personalized models.</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon">🔢</span>
+                <h4>Auto-calibrated Thresholds</h4>
+                <p>Computes custom limits dynamically from registration data using statistical models.</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon">📐</span>
+                <h4>Dual Normalization</h4>
+                <p>Spatial (position/scale invariant) + Temporal (speed invariant via 60-frame interpolation).</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon">🔒</span>
+                <h4>4-Gate Security</h4>
+                <p>Requires passing DTW Distance, Finger State Avg, Transition Order, and Segment Max Mismatch.</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon">🖥️</span>
+                <h4>Live OpenCV UI</h4>
+                <p>Visual feedback with progress bars, status banners, and detailed pass/fail overlays.</p>
+            </div>
+        </div>
+
+        <!-- 2. ARCHITECTURE -->
+        <h2 id="architecture"><span class="emoji">🏗️</span> 2. Architecture & Data Flow</h2>
+        
+        <p>The authentication pipeline operates in distinct stages, strictly normalizing data before applying the security evaluations.</p>
+
+        <pre>
+Raw webcam frame
+    │
+    ▼
+MediaPipe hand detection
+    │
+    ▼
+Raw Landmarks: Shape (N, 21, 3) 
+    │  [N varies based on gesture duration, e.g., 75 frames]
+    ▼
+Spatial Normalization: Center on wrist, scale to unit sphere
+    │
+    ▼
+Temporal Normalization: Linear interpolation along time axis
+    │
+    ▼
+Normalized Gesture: Shape (60, 21, 3)
+    │  [Exactly 60 frames, ready for 1:1 comparison]
+    ▼
+Authentication Engine / Security Gates
+        </pre>
+
+        <!-- 3. SECURITY GATES -->
+        <h2 id="gates"><span class="emoji">🛡️</span> 3. The 4-Gate Security Architecture</h2>
+        
+        <p>To prevent false acceptances (e.g., performing a similar but incorrect gesture like "1-2-3" instead of "1-2-4-3"), WaveLock evaluates every gesture across 4 dimensions. A single failure in *any* gate results in access denial.</p>
+
+        <table>
+            <tr>
+                <th>Gate</th>
+                <th>Description</th>
+                <th>What it prevents</th>
+            </tr>
+            <tr>
+                <td><strong>Gate 1: DTW Distance</strong></td>
+                <td>Evaluates the overall 3D trajectory and motion path of the gesture using Dynamic Time Warping.</td>
+                <td>Completely different physical movements.</td>
+            </tr>
+            <tr>
+                <td><strong>Gate 2: Finger State Average Mismatch</strong></td>
+                <td>Evaluates whether the correct fingers are extended across the entirety of the 60 frames (measured as an average).</td>
+                <td>Gestures that use the wrong fingers overall.</td>
+            </tr>
+            <tr>
+                <td><strong>Gate 3: Finger Transition Order</strong></td>
+                <td>Extracts the exact sequential order of finger movements (e.g., Index Up → Middle Up). Uses Levenshtein edit distance.</td>
+                <td>Incorrect ordering (e.g., "1-3-2-4") or missing steps.</td>
+            </tr>
+            <tr>
+                <td><strong>Gate 4: Segment Max Mismatch</strong></td>
+                <td>Divides the 60 frames into 6 discrete 10-frame segments and evaluates the <em>worst</em> segment.</td>
+                <td>Localized spoofing attacks where a gesture is 90% correct but fails in a critical 10% window.</td>
+            </tr>
+        </table>
+
+        <!-- 4. STRUCTURE -->
+        <h2 id="structure"><span class="emoji">📁</span> 4. Directory Structure</h2>
+        
+        <div class="file-tree">
+            <div><span class="dir">gesture_auth_project/</span></div>
+            <div>├── <span class="file">gesture_auth.py</span> <span class="comment"># MAIN: Run this to authenticate</span></div>
+            <div>├── <span class="file">gesture_capture.py</span> <span class="comment"># MAIN: Run this to register a new user</span></div>
+            <div>├── <span class="file">gesture_compare.py</span> <span class="comment"># CORE: Security gates, DTW, thresholds</span></div>
+            <div>├── <span class="dir">utils/</span></div>
+            <div>│   ├── <span class="file">landmarks.py</span> <span class="comment"># Helpers for MediaPipe → NumPy</span></div>
+            <div>│   └── <span class="file">normalize.py</span> <span class="comment"># Spatial & temporal math</span></div>
+            <div>├── <span class="dir">templates/</span> <span class="comment"># Auto-generated storage</span></div>
+            <div>│   └── <span class="dir">&lt;username&gt;/</span></div>
+            <div>│       ├── <span class="file">config.json</span> <span class="comment"># Auto-calibrated limits</span></div>
+            <div>│       ├── <span class="file">gesture_1.npy</span> <span class="comment"># Stored sample (60, 21, 3)</span></div>
+            <div>│       └── ...</div>
+            <div>└── <span class="file">PROJECT_GUIDE.html</span></div>
+        </div>
+
+        <!-- 5. MODULES -->
+        <h2 id="modules"><span class="emoji">🧩</span> 5. Core Modules</h2>
+
+        <h3><code>gesture_auth.py</code></h3>
+        <p>The entry point for logging in. It loads user templates and the <code>config.json</code>, executes the 3-second recording loop, visualizes real-time progress, and triggers the comparison engine. Finally, it overlays granular pass/fail metrics on the webcam feed.</p>
+
+        <h3><code>gesture_capture.py</code></h3>
+        <p>The entry point for registering new users. It guides the user through performing their gesture <strong>5 separate times</strong>. It filters out bad captures, requests threshold calibration from the core engine, and saves everything to disk.</p>
+
+        <h3><code>gesture_compare.py</code></h3>
+        <p>The mathematical and security core of the system.</p>
+        <ul>
+            <li><strong>DTW Math:</strong> <code>compute_dtw_distance()</code></li>
+            <li><strong>Finger states:</strong> <code>compute_finger_state_mismatch()</code>, <code>_joint_angle_degrees()</code></li>
+            <li><strong>Sequence extraction:</strong> <code>extract_finger_transitions()</code>, <code>_levenshtein_distance()</code>, <code>compute_transition_dissimilarity()</code></li>
+            <li><strong>Segment evaluation:</strong> <code>compute_segment_max_mismatch()</code></li>
+            <li><strong>Threshold calibration:</strong> <code>compute_threshold_details()</code></li>
+            <li><strong>Decision Engine:</strong> <code>authenticate_with_details()</code></li>
+        </ul>
+
+        <h3><code>utils/normalize.py</code></h3>
+        <ul>
+            <li><code>normalize_spatial()</code>: Subtracts wrist coordinates and divides by maximum Euclidean distance to bound the hand in a unit sphere.</li>
+            <li><code>normalize_temporal()</code>: Uses <code>scipy.interpolate.interp1d</code> to resample <code>N</code> frames to exactly 60 frames.</li>
+        </ul>
+
+        <!-- 6. CONFIG -->
+        <h2 id="config"><span class="emoji">⚙️</span> 6. Configuration Format</h2>
+
+        <p>The system stores per-user security limits in <code>templates/&lt;username&gt;/config.json</code>:</p>
+        <pre>{
+  "threshold": 2.3094,               // Limit for Gate 1 (DTW)
+  "finger_state_threshold": 0.2233,  // Limit for Gate 2 (Avg Mismatch)
+  "transition_threshold": 0.3657,    // Limit for Gate 3 (Order)
+  "segment_threshold": 0.3800,       // Limit for Gate 4 (Segment Max)
+  "num_samples": 5,                  // Number of templates stored
+  "threshold_method": "statistical_v2", 
+  "pairwise_distances": [...],       // Debug data from calibration
+  "consistency_score": 74.83         // Score out of 100 based on variance
+}</pre>
+
+        <!-- 7. SETUP -->
+        <h2 id="setup"><span class="emoji">🚀</span> 7. Setup and Usage</h2>
+
+        <h3>Requirements</h3>
+        <p>Python 3.8+ with <code>opencv-python</code>, <code>mediapipe</code>, <code>numpy</code>, <code>scipy</code>, and <code>dtaidistance</code>.</p>
+
+        <h3>Step 1: Register</h3>
+        <pre>python gesture_capture.py</pre>
+        <p><em>Enter a username and follow the on-screen prompts to perform your gesture 5 times.</em></p>
+
+        <h3>Step 2: Authenticate</h3>
+        <pre>python gesture_auth.py</pre>
+        <p><em>Enter your username, press <code>[R]</code> to record, and perform your gesture. The system will display granular pass/fail metrics for all 4 security gates.</em></p>
+
+    </main>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WaveLock — DTW Deep Dive</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface-hover: #1c2333;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79c0ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --orange: #d29922;
+            --purple: #bc8cff;
+            --cyan: #39d2c0;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* ─── Hero ─── */
+        .hero {
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 40%, #1a1e2e 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 60px 20px 50px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%; left: -50%;
+            width: 200%; height: 200%;
+            background: radial-gradient(circle at 30% 50%, rgba(88,166,255,0.05) 0%, transparent 60%),
+                        radial-gradient(circle at 70% 30%, rgba(188,140,255,0.04) 0%, transparent 50%);
+            pointer-events: none;
+        }
+        .hero h1 { font-size: 2.8rem; font-weight: 800; margin-bottom: 10px; position: relative; }
+        .hero h1 .emoji { font-size: 2.4rem; }
+        .hero .subtitle { color: var(--text-muted); font-size: 1.15rem; position: relative; }
+        .hero .badge {
+            display: inline-block; margin-top: 18px;
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 6px 16px; border-radius: 20px;
+            font-size: 0.85rem; color: var(--accent);
+            position: relative;
+        }
+
+        /* ─── Layout ─── */
+        .layout { display: flex; max-width: 1400px; margin: 0 auto; }
+
+        /* ─── Sidebar ─── */
+        .sidebar {
+            width: 280px; min-width: 280px;
+            position: sticky; top: 0; height: 100vh;
+            overflow-y: auto; padding: 24px 16px;
+            border-right: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .sidebar h3 { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.2px; margin: 20px 0 8px; }
+        .sidebar a {
+            display: block; padding: 6px 12px; border-radius: 6px;
+            color: var(--text-muted); text-decoration: none; font-size: 0.88rem;
+            transition: all 0.15s;
+        }
+        .sidebar a:hover { background: var(--surface-hover); color: var(--text); }
+        .sidebar .step-num {
+            display: inline-block; width: 22px; height: 22px; line-height: 22px;
+            text-align: center; border-radius: 50%;
+            background: var(--border); color: var(--text-muted);
+            font-size: 0.7rem; font-weight: 700; margin-right: 6px;
+        }
+
+        /* ─── Main Content ─── */
+        .content {
+            flex: 1; padding: 40px 50px; max-width: 900px;
+        }
+
+        h2 {
+            font-size: 1.6rem; font-weight: 700;
+            margin: 48px 0 16px; padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; gap: 12px;
+        }
+        h2 .step-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 36px; height: 36px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent), var(--purple));
+            color: white; font-size: 0.9rem; font-weight: 800; flex-shrink: 0;
+        }
+        h3 { font-size: 1.15rem; margin: 28px 0 10px; color: var(--accent); }
+        h4 { font-size: 1rem; margin: 20px 0 8px; color: var(--purple); }
+
+        p { margin: 10px 0; }
+
+        pre {
+            background: #0d1117; border: 1px solid var(--border);
+            border-radius: 8px; padding: 16px 20px;
+            overflow-x: auto; font-size: 0.85rem;
+            line-height: 1.5; margin: 14px 0;
+            font-family: 'Fira Code', 'Cascadia Code', monospace;
+        }
+        code {
+            font-family: 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 0.88em;
+        }
+        p code, li code, td code {
+            background: rgba(88,166,255,0.1); color: var(--accent);
+            padding: 2px 6px; border-radius: 4px;
+        }
+
+        /* ─── Tables ─── */
+        table {
+            width: 100%; border-collapse: collapse;
+            margin: 14px 0; font-size: 0.9rem;
+        }
+        th {
+            background: var(--surface); padding: 10px 14px;
+            text-align: left; font-weight: 600; border-bottom: 2px solid var(--border);
+        }
+        td {
+            padding: 8px 14px; border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+        tr:hover td { background: var(--surface-hover); }
+
+        /* Style specifically for the DTW matrix */
+        .dtw-matrix { width: auto; margin: 20px auto; }
+        .dtw-matrix th { text-align: center; }
+        .dtw-matrix td { text-align: center; padding: 12px; }
+        .dtw-matrix .highlight { background: rgba(88,166,255,0.2); font-weight: bold; color: var(--accent); border-radius: 4px; }
+
+        /* ─── Alert Boxes ─── */
+        .alert {
+            border-radius: 8px; padding: 16px 20px;
+            margin: 16px 0; border-left: 4px solid;
+        }
+        .alert-info { background: rgba(88,166,255,0.08); border-color: var(--accent); }
+        .alert-success { background: rgba(63,185,80,0.08); border-color: var(--green); }
+        .alert-warning { background: rgba(210,153,34,0.08); border-color: var(--orange); }
+        .alert-danger { background: rgba(248,81,73,0.08); border-color: var(--red); }
+        .alert-title { font-weight: 700; margin-bottom: 6px; }
+        .alert-info .alert-title { color: var(--accent); }
+        .alert-success .alert-title { color: var(--green); }
+        .alert-warning .alert-title { color: var(--orange); }
+        .alert-danger .alert-title { color: var(--red); }
+
+        ul, ol { margin: 8px 0 8px 24px; }
+        li { margin: 4px 0; }
+
+        @media (max-width: 900px) {
+            .sidebar { display: none; }
+            .content { padding: 24px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <h1><span class="emoji">🧮</span> DTW Deep Dive</h1>
+    <div class="subtitle">
+        The Mathematical Heart of WaveLock's Motion Tracking. From core theory to 63-dimensional implementation.
+    </div>
+    <span class="badge">Dynamic Time Warping Explained</span>
+</div>
+
+<div class="layout">
+    <nav class="sidebar">
+        <h3>Phase 1: The Concept</h3>
+        <a href="#problem"><span class="step-num">1</span> The Speed Dilemma</a>
+        <a href="#how-it-works"><span class="step-num">2</span> How DTW Works</a>
+        <a href="#example"><span class="step-num">3</span> A Concrete Matrix Example</a>
+        <a href="#formula"><span class="step-num">4</span> The DP Formula</a>
+        
+        <h3>Phase 2: Project Usage</h3>
+        <a href="#challenge"><span class="step-num">1</span> 3D Hand Tracking</a>
+        <a href="#flattening"><span class="step-num">2</span> Flattening the Data</a>
+        <a href="#library"><span class="step-num">3</span> The dtaidistance Library</a>
+        <a href="#temporal"><span class="step-num">4</span> DTW vs Temporal Norm</a>
+        <a href="#threshold"><span class="step-num">5</span> The Decision</a>
+    </nav>
+
+    <main class="content">
+
+        <!-- OVERVIEW -->
+        <div class="alert alert-info">
+            <div class="alert-title">📖 Goal of this Document</div>
+            To understand how WaveLock recognizes gestures, you must understand <strong>Dynamic Time Warping (DTW)</strong>. This document is divided into two phases: First, we learn the general algorithm. Second, we see exactly how it is used in the WaveLock Python code.
+        </div>
+
+        <h2 id="problem"><span class="step-badge">P1</span> Phase 1: The Core Concept of DTW</h2>
+
+        <h3>1. The Problem: The "Speed" Dilemma</h3>
+        <p>Imagine you want to compare two audio recordings of someone saying the word "Hello."</p>
+        <ul>
+            <li><strong>Recording A:</strong> Says it normally: "Hel-lo" (lasts 1 second).</li>
+            <li><strong>Recording B:</strong> Says it slowly: "Heeeelllll-looooo" (lasts 3 seconds).</li>
+        </ul>
+        <p>If you compare these sound waves line-by-line (at exactly the same timestamps), they will look completely different. At the 1-second mark, Recording A is finished, while Recording B is still saying "eeee." A standard linear comparison (like Euclidean distance) will tell you these are completely different words.</p>
+        <p>We need an algorithm that can <strong>stretch and squash time</strong>, matching the "H" in Recording A to the "H" in Recording B, and the "o" to the "o", regardless of exactly when they happen. This is Dynamic Time Warping.</p>
+
+        <h3 id="how-it-works">2. How DTW Works (The Rules)</h3>
+        <p>DTW finds the <strong>optimal alignment</strong> (the best matching path) between two sequences by building a matrix and finding the "cheapest" path through it. To prevent crazy impossible alignments (like matching the end of a word to the beginning of a word), DTW enforces strict rules:</p>
+        <ol>
+            <li><strong>Boundary Conditions:</strong> The path must start at the beginning of both sequences <code>(0, 0)</code> and end at the end of both sequences <code>(N, M)</code>.</li>
+            <li><strong>Monotonicity:</strong> Time only goes forward. You can't match frame 5 of Sequence A to frame 3 of Sequence B, and then move backwards.</li>
+            <li><strong>Continuity:</strong> The path can only step to adjacent cells (diagonally, right, or down). No skipping frames.</li>
+        </ol>
+
+        <h3 id="example">3. A Concrete Mathematical Example</h3>
+        <p>Let's align two simple 1D number sequences:</p>
+        <ul>
+            <li><strong>Sequence A:</strong> <code>[1, 3, 4, 9, 8]</code></li>
+            <li><strong>Sequence B:</strong> <code>[1, 1, 3, 4, 9, 9, 8]</code> <br><span style="color:var(--text-muted);font-size:0.9em">(Notice Sequence B is basically the same, just "slower" because it repeats 1 and 9).</span></li>
+        </ul>
+
+        <p><strong>Step 1: The Cost Matrix.</strong> We create a grid. Every cell contains the absolute difference (distance) between the two numbers. <br><strong>Step 2: The Path.</strong> DTW uses Dynamic Programming to find the path from bottom-left to top-right with the lowest total sum.</p>
+
+        <table class="dtw-matrix">
+            <tr>
+                <th>A \ B</th>
+                <th>1</th><th>1</th><th>3</th><th>4</th><th>9</th><th>9</th><th>8</th>
+            </tr>
+            <tr>
+                <th>8</th>
+                <td>7</td><td>7</td><td>5</td><td>4</td><td>1</td><td>1</td><td class="highlight">0</td>
+            </tr>
+            <tr>
+                <th>9</th>
+                <td>8</td><td>8</td><td>6</td><td>5</td><td class="highlight">0</td><td class="highlight">0</td><td>1</td>
+            </tr>
+            <tr>
+                <th>4</th>
+                <td>3</td><td>3</td><td>1</td><td class="highlight">0</td><td>5</td><td>5</td><td>4</td>
+            </tr>
+            <tr>
+                <th>3</th>
+                <td>2</td><td>2</td><td class="highlight">0</td><td>1</td><td>6</td><td>6</td><td>5</td>
+            </tr>
+            <tr>
+                <th>1</th>
+                <td class="highlight">0</td><td class="highlight">0</td><td>2</td><td>3</td><td>8</td><td>8</td><td>7</td>
+            </tr>
+        </table>
+
+        <p>Notice the highlighted path: The <code>1</code> in Sequence A maps to <em>both</em> <code>1</code>s in Sequence B (moving horizontally). The <code>9</code> in Sequence A maps to <em>both</em> <code>9</code>s in Sequence B. The <strong>Total Cost = 0</strong>. DTW recognizes these sequences represent the exact same core pattern, despite different speeds!</p>
+
+        <h3 id="formula">4. The Dynamic Programming Formula</h3>
+        <p>For every cell <code>(i, j)</code>, the algorithm calculates the cheapest way to get there using this formula:</p>
+        <pre>DTW(i, j) = cost(i, j) + MIN (
+    DTW(i-1, j),    // Insertion
+    DTW(i, j-1),    // Deletion
+    DTW(i-1, j-1)   // Match (Diagonal)
+)</pre>
+
+        <hr style="border: 0; height: 1px; background: var(--border); margin: 40px 0;">
+
+        <h2 id="challenge"><span class="step-badge">P2</span> Phase 2: DTW in the WaveLock Project</h2>
+
+        <p>Now, let's look at exactly how WaveLock uses this algorithm to recognize hand gestures in <code>gesture_compare.py</code>.</p>
+
+        <h3>1. The Challenge of 3D Hand Tracking</h3>
+        <p>In WaveLock, we aren't matching 1D numbers. Every single frame of video gives us <strong>21 landmarks</strong>, and each landmark has <strong>3 coordinates</strong> (X, Y, Z).</p>
+        <p>When you perform a gesture, you might raise your hand slowly but lower it quickly. This <strong>non-linear speed variation</strong> is exactly why we need DTW.</p>
+
+        <h3 id="flattening">2. Preparing the Data (Flattening)</h3>
+        <p>After Temporal Normalization, every gesture is a matrix of shape <code>(60, 21, 3)</code>. That means 60 frames, 21 landmarks, 3 coordinates.</p>
+        <p>DTW expects a sequence of "points" in space. So, we <strong>flatten</strong> the hand data:</p>
+
+        <pre># From gesture_compare.py
+flat_a = gesture_a.reshape(60, -1).astype(np.float64) 
+flat_b = gesture_b.reshape(60, -1).astype(np.float64)</pre>
+        
+        <p>Because <code>21 * 3 = 63</code>, we reshape <code>(60, 21, 3)</code> into <code>(60, 63)</code>. Now, we have a sequence of 60 frames. In each frame, the "point" is a <strong>63-dimensional vector</strong> that represents the exact shape and position of the entire hand at that millisecond.</p>
+
+        <h3 id="library">3. The Library: <code>dtaidistance</code></h3>
+        <p>We use an optimized library called <code>dtaidistance</code> to do the heavy lifting, specifically the <code>dtw_ndim</code> (N-Dimensional DTW) module.</p>
+
+        <pre>distance = dtw_ndim.distance(flat_a, flat_b)</pre>
+
+        <p><strong>What is happening inside this function?</strong><br>
+        It builds a 60x60 grid. But instead of the cost being simple subtraction, the cost between cell <code>i</code> and cell <code>j</code> is the <strong>Euclidean Distance in 63-dimensional space</strong>. It calculates how physically different the hand shape in Frame <code>i</code> (Live) is from the hand shape in Frame <code>j</code> (Template). Then, it finds the cheapest warping path from Frame 0 to Frame 59.</p>
+
+        <h3 id="temporal">4. Wait, if both are 60 frames, why do we need DTW?</h3>
+        <div class="alert alert-warning">
+            <div class="alert-title">A Crucial Distinction</div>
+            This is a very common point of confusion. Why use DTW if Temporal Normalization already makes both gestures exactly 60 frames long?
+        </div>
+        <ul>
+            <li><strong>Temporal Normalization</strong> stretches or squashes the <em>overall</em> video so both are 60 frames long. It solves <strong>linear</strong> speed differences (e.g., a 3-second wave vs a 2-second wave).</li>
+            <li><strong>DTW</strong> solves <strong>non-linear</strong> speed differences.
+                <ul>
+                    <li>Imagine Template Gesture: Raise hand (30 frames), Lower hand (30 frames).</li>
+                    <li>Imagine Live Gesture: Raise hand slowly (45 frames), Lower hand fast (15 frames).</li>
+                    <li>Both are 60 frames total! But frame 30 of the Live gesture is still moving up, while frame 30 of the Template gesture is at the peak. </li>
+                </ul>
+            </li>
+        </ul>
+        <p>If you compared them directly (frame 30 vs frame 30), it would fail completely. DTW "warps" the comparison, correctly mapping the slow 45-frame raise to the standard 30-frame raise.</p>
+
+        <h3 id="threshold">5. The Output and Thresholding</h3>
+        <p>The <code>distance</code> returned by DTW is a single float number representing the total cost of the warping path.</p>
+        
+        <table>
+            <tr><th>Distance</th><th>Meaning</th></tr>
+            <tr><td>0.0</td><td>Exact mathematically identical match</td></tr>
+            <tr><td>~0.5 to 1.5</td><td>Normal human variation of the same gesture</td></tr>
+            <tr><td>~2.5 to 5.0+</td><td>A completely different physical gesture</td></tr>
+        </table>
+
+        <p>In <code>gesture_compare.py</code>, this number acts as <strong>Security Gate 1</strong>. We compare it against the user's specific threshold saved in <code>config.json</code> (e.g., <code>2.3094</code>).</p>
+
+        <pre>passes_distance = (distance <= threshold)</pre>
+
+        <p>If the distance is lower than the limit, the overall physical motion of the gesture is approved, and the system moves on to check the specific fingers (Gate 2, 3, and 4).</p>
+
+    </main>
+</div>
+
+</body>
+</html>

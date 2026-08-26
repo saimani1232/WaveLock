@@ -33,7 +33,11 @@ import mediapipe as mp
 from utils.landmarks import extract_landmarks, is_hand_detected
 from utils.normalize import normalize_gesture
 from gesture_compare import (
+    compute_finger_state_threshold_details,
+    compute_transition_threshold_details,
+    compute_segment_threshold_details,
     compute_threshold_from_samples,
+    compute_threshold_details,
     save_registration,
     list_registered_users,
     NUM_REGISTRATION_SAMPLES,
@@ -430,6 +434,10 @@ def main():
     print("  Computing optimal threshold from your samples...")
 
     threshold, pairwise_distances = compute_threshold_from_samples(samples)
+    threshold_details = compute_threshold_details(pairwise_distances)
+    finger_state_details = compute_finger_state_threshold_details(samples)
+    transition_details = compute_transition_threshold_details(samples)
+    segment_details = compute_segment_threshold_details(samples)
 
     print()
     print("  Pairwise distances between your recordings:")
@@ -441,7 +449,15 @@ def main():
             pair_idx += 1
 
     print(f"  Max variation:     {max(pairwise_distances):.4f}")
-    print(f"  Computed threshold: {threshold:.4f}")
+    print(f"  Consistency score: {threshold_details['consistency_score']:.1f}/100")
+    print(f"  Threshold method:  {threshold_details['method']}")
+    print(f"  Computed threshold:      {threshold:.4f}")
+    print(f"  Finger mismatch limit:   "
+          f"{finger_state_details['threshold']:.4f}")
+    print(f"  Transition order limit:  "
+          f"{transition_details['threshold']:.4f}")
+    print(f"  Segment mismatch limit:  "
+          f"{segment_details['threshold']:.4f}")
 
     # ─── Save registration ────────────────────────────────────────────
     user_dir = save_registration(

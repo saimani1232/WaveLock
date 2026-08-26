@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WaveLock — Gesture Capture Deep Dive</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface-hover: #1c2333;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79c0ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --orange: #d29922;
+            --purple: #bc8cff;
+            --cyan: #39d2c0;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* ─── Hero ─── */
+        .hero {
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 40%, #1a1e2e 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 60px 20px 50px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%; left: -50%;
+            width: 200%; height: 200%;
+            background: radial-gradient(circle at 30% 50%, rgba(88,166,255,0.05) 0%, transparent 60%),
+                        radial-gradient(circle at 70% 30%, rgba(188,140,255,0.04) 0%, transparent 50%);
+            pointer-events: none;
+        }
+        .hero h1 { font-size: 2.8rem; font-weight: 800; margin-bottom: 10px; position: relative; }
+        .hero h1 .emoji { font-size: 2.4rem; }
+        .hero .subtitle { color: var(--text-muted); font-size: 1.15rem; position: relative; }
+        .hero .badge {
+            display: inline-block; margin-top: 18px;
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 6px 16px; border-radius: 20px;
+            font-size: 0.85rem; color: var(--accent);
+            position: relative;
+        }
+
+        /* ─── Layout ─── */
+        .layout { display: flex; max-width: 1400px; margin: 0 auto; }
+
+        /* ─── Sidebar ─── */
+        .sidebar {
+            width: 280px; min-width: 280px;
+            position: sticky; top: 0; height: 100vh;
+            overflow-y: auto; padding: 24px 16px;
+            border-right: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .sidebar h3 { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.2px; margin: 20px 0 8px; }
+        .sidebar a {
+            display: block; padding: 6px 12px; border-radius: 6px;
+            color: var(--text-muted); text-decoration: none; font-size: 0.88rem;
+            transition: all 0.15s;
+        }
+        .sidebar a:hover { background: var(--surface-hover); color: var(--text); }
+        .sidebar .step-num {
+            display: inline-block; width: 22px; height: 22px; line-height: 22px;
+            text-align: center; border-radius: 50%;
+            background: var(--border); color: var(--text-muted);
+            font-size: 0.7rem; font-weight: 700; margin-right: 6px;
+        }
+
+        /* ─── Main Content ─── */
+        .content {
+            flex: 1; padding: 40px 50px; max-width: 900px;
+        }
+
+        h2 {
+            font-size: 1.6rem; font-weight: 700;
+            margin: 48px 0 16px; padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; gap: 12px;
+        }
+        h2 .step-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 36px; height: 36px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent), var(--purple));
+            color: white; font-size: 0.9rem; font-weight: 800; flex-shrink: 0;
+        }
+        h3 { font-size: 1.15rem; margin: 28px 0 10px; color: var(--accent); }
+        h4 { font-size: 1rem; margin: 20px 0 8px; color: var(--purple); }
+
+        p { margin: 10px 0; }
+
+        pre {
+            background: #0d1117; border: 1px solid var(--border);
+            border-radius: 8px; padding: 16px 20px;
+            overflow-x: auto; font-size: 0.85rem;
+            line-height: 1.5; margin: 14px 0;
+            font-family: 'Fira Code', 'Cascadia Code', monospace;
+        }
+        code {
+            font-family: 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 0.88em;
+        }
+        p code, li code, td code {
+            background: rgba(88,166,255,0.1); color: var(--accent);
+            padding: 2px 6px; border-radius: 4px;
+        }
+
+        /* ─── Tables ─── */
+        table {
+            width: 100%; border-collapse: collapse;
+            margin: 14px 0; font-size: 0.9rem;
+        }
+        th {
+            background: var(--surface); padding: 10px 14px;
+            text-align: left; font-weight: 600; border-bottom: 2px solid var(--border);
+        }
+        td {
+            padding: 8px 14px; border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        tr:hover td { background: var(--surface-hover); }
+
+        /* ─── Alert Boxes ─── */
+        .alert {
+            border-radius: 8px; padding: 16px 20px;
+            margin: 16px 0; border-left: 4px solid;
+        }
+        .alert-info { background: rgba(88,166,255,0.08); border-color: var(--accent); }
+        .alert-success { background: rgba(63,185,80,0.08); border-color: var(--green); }
+        .alert-warning { background: rgba(210,153,34,0.08); border-color: var(--orange); }
+        .alert-danger { background: rgba(248,81,73,0.08); border-color: var(--red); }
+        .alert-title { font-weight: 700; margin-bottom: 6px; }
+        .alert-info .alert-title { color: var(--accent); }
+        .alert-success .alert-title { color: var(--green); }
+        .alert-warning .alert-title { color: var(--orange); }
+        .alert-danger .alert-title { color: var(--red); }
+
+        ul, ol { margin: 8px 0 8px 24px; }
+        li { margin: 4px 0; }
+
+        @media (max-width: 900px) {
+            .sidebar { display: none; }
+            .content { padding: 24px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <h1><span class="emoji">🎥</span> Capture Deep Dive</h1>
+    <div class="subtitle">
+        The complete, step-by-step sequence of how gestures are learned, mathematically analyzed, and strictly calibrated during registration.
+    </div>
+    <span class="badge">WaveLock Gesture Capture Process</span>
+</div>
+
+<div class="layout">
+    <nav class="sidebar">
+        <h3>Pipeline Steps</h3>
+        <a href="#overview"><span class="step-num">!</span> Overview</a>
+        <a href="#step1"><span class="step-num">1</span> Startup & User Handling</a>
+        <a href="#step2"><span class="step-num">2</span> Webcam & Setup</a>
+        <a href="#step3"><span class="step-num">3</span> Multi-Sample Recording</a>
+        <a href="#step4"><span class="step-num">4</span> Immediate Quality Control</a>
+        <a href="#step5"><span class="step-num">5</span> Threshold Calibration</a>
+        <a href="#step6"><span class="step-num">6</span> Saving to Disk</a>
+        <a href="#walkthrough"><span class="step-num">★</span> Concrete Walkthrough</a>
+    </nav>
+
+    <main class="content">
+
+        <!-- OVERVIEW -->
+        <h2 id="overview"><span class="step-badge">!</span> Overview: The Registration Lifecycle</h2>
+        
+        <p>Authentication is only as good as the initial registration. If the system only took one sample, it wouldn't know how much your hand naturally shakes or how fast you usually move.</p>
+
+        <p>The goal of <code>gesture_capture.py</code> is to:</p>
+        <ol>
+            <li>Record <strong>5 separate samples</strong> of your gesture.</li>
+            <li>Ensure every sample is mathematically normalized.</li>
+            <li>Compare all 5 samples against each other to calculate your <strong>personal consistency</strong>.</li>
+            <li>Set <strong>4 custom security thresholds</strong> that are tight enough to block attackers but loose enough to let you in reliably.</li>
+        </ol>
+
+        <!-- STEP 1 -->
+        <h2 id="step1"><span class="step-badge">1</span> Program Startup & User Handling</h2>
+
+        <p>When <code>python gesture_capture.py</code> executes, it starts in the <code>main()</code> function:</p>
+
+        <h3>a) Banner & Username Prompt</h3>
+        <pre>==========================================================
+   GESTURE AUTH — New User Registration
+==========================================================
+
+Enter a username to register: saimani</pre>
+
+        <h3>b) Handling Existing Users</h3>
+        <p>If a folder named <code>templates/saimani</code> already exists, the system warns the user to prevent accidental data loss:</p>
+        <pre>User 'saimani' already exists.
+Do you want to overwrite the existing gesture? (y/n): y</pre>
+        <p>If accepted, the old data is cleared right before new data is saved.</p>
+
+        <!-- STEP 2 -->
+        <h2 id="step2"><span class="step-badge">2</span> Webcam & Hand Tracking Setup</h2>
+
+        <p>The system initializes MediaPipe Hands. For registration, the confidence thresholds are kept relatively high to ensure the baseline data is extremely accurate:</p>
+
+        <pre>hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.7, # 70% confidence needed to detect
+    min_tracking_confidence=0.5,
+)</pre>
+
+        <p>OpenCV then opens the webcam and creates the graphical user interface.</p>
+
+        <!-- STEP 3 -->
+        <h2 id="step3"><span class="step-badge">3</span> The Multi-Sample Recording Loop</h2>
+
+        <p>To measure human variation, the system requires <code>NUM_REGISTRATION_SAMPLES = 5</code>. It enters a loop that prompts the user 5 times.</p>
+
+        <h3>The Recording Trigger</h3>
+        <p>The system tracks the hand in real-time but <strong>does not record</strong> until the user presses <code>[R]</code>.</p>
+
+        <h3>The 3-Second Window</h3>
+        <p>Once <code>[R]</code> is pressed, <code>record_one_sample()</code> starts a strict 3-second timer:</p>
+        <pre>RECORDING_DURATION_SEC = 3
+recording_start_time = time.time()
+recorded_frames = []</pre>
+
+        <p>For exactly 3.0 seconds (at ~30 FPS):</p>
+        <ul>
+            <li>If a hand is detected, the 21 3D landmarks are converted to a NumPy array <code>(21, 3)</code> and appended to the list.</li>
+            <li>If the hand is lost, the frame is skipped.</li>
+        </ul>
+
+        <!-- STEP 4 -->
+        <h2 id="step4"><span class="step-badge">4</span> Immediate Quality Control & Normalization</h2>
+
+        <p>Before moving to the next sample, the captured 3 seconds of data must pass strict quality checks.</p>
+
+        <h3>Rule 1: Minimum Frame Count</h3>
+        <p>If the user's hand dropped out of frame too often, they might only have 8 recorded frames.</p>
+        <pre>if len(recorded_frames) &lt; 10:
+    return None  # Gesture rejected. User must re-record this sample.</pre>
+
+        <h3>Rule 2: On-the-Fly Normalization</h3>
+        <p>If the frame count is valid (e.g., 74 frames), it immediately goes through <code>normalize_gesture()</code>:</p>
+        <ol>
+            <li><strong>Spatial Normalization:</strong> Every frame is mathematically shifted so the wrist is at <code>(0,0,0)</code>, and scaled down so the furthest fingertip is exactly <code>1.0</code> unit away.</li>
+            <li><strong>Temporal Normalization:</strong> The 74 frames are mathematically "stretched" or "squashed" using linear interpolation to become exactly <strong>60 frames</strong>.</li>
+        </ol>
+
+        <p>If successful, this normalized <code>(60, 21, 3)</code> sample is stored in memory, and the system prompts the user to record the next sample.</p>
+
+        <!-- STEP 5 -->
+        <h2 id="step5"><span class="step-badge">5</span> The Threshold Calibration Engine</h2>
+
+        <div class="alert alert-danger">
+            <div class="alert-title">🧠 The Core Math</div>
+            This is the most crucial part of registration. This step calculates exactly how strictly the system will judge this specific user when they try to log in tomorrow.
+        </div>
+
+        <p>Once all 5 samples are stored, the system calls <code>compute_threshold_details()</code>. </p>
+
+        <h3>The "Pairwise" Comparison Concept</h3>
+        <p>To measure variation, the system compares the 5 samples <strong>against each other</strong>. Using combinatorial math (5 choose 2), this yields <strong>10 unique pairs</strong>: (1vs2), (1vs3), (1vs4), (1vs5), (2vs3), (2vs4), (2vs5), (3vs4), (3vs5), (4vs5).</p>
+        <p>The system runs all 4 security gates on these 10 pairs to find the user's maximum natural mistakes.</p>
+
+        <h3>Gate 1: DTW Distance Calibration</h3>
+        <p>Let's say the 10 DTW distances are: <code>[1.1, 1.2, 1.3, 1.0, 1.4, 1.2, 1.1, 1.3, 1.5, 1.2]</code>.</p>
+        <ul>
+            <li><strong>Mean:</strong> 1.23</li>
+            <li><strong>Standard Deviation (Std):</strong> 0.14</li>
+            <li><strong>Statistical Threshold:</strong> Mean + (2 * Std) = <code>1.51</code> (Covers 95% of normal variations).</li>
+            <li><strong>Max Margin Threshold:</strong> Max distance * 1.25 = <code>1.5 * 1.25 = 1.875</code>.</li>
+        </ul>
+        <p>The system intelligently selects a safe ceiling, applying a strict floor of <code>2.0</code> to prevent the threshold from becoming impossibly tight.</p>
+
+        <h3>Gate 2: Finger State Mismatch Calibration</h3>
+        <p>Let's say the maximum finger mismatch among the 10 pairs is <code>0.08</code>.</p>
+        <ul>
+            <li><strong>Margin Added:</strong> + <code>0.08</code> margin.</li>
+            <li><strong>Calculated Limit:</strong> <code>0.08 + 0.08 = 0.16</code>.</li>
+            <li><strong>Hard Caps:</strong> Constrained between <code>0.12</code> and <code>0.30</code>. Selected: <code>0.16</code>.</li>
+        </ul>
+
+        <h3>Gate 3: Transition Order Calibration</h3>
+        <p>Let's say the maximum sequence dissimilarity (edit distance) is <code>0.15</code>.</p>
+        <ul>
+            <li><strong>Margin Added:</strong> + <code>0.08</code> margin.</li>
+            <li><strong>Calculated Limit:</strong> <code>0.15 + 0.08 = 0.23</code>.</li>
+            <li><strong>Hard Caps:</strong> Constrained between <code>0.10</code> and <code>0.40</code>. Selected: <code>0.23</code>.</li>
+        </ul>
+
+        <h3>Gate 4: Segment Max Mismatch Calibration</h3>
+        <p>Let's say the maximum segment mismatch in the 10 pairs is <code>0.12</code>.</p>
+        <ul>
+            <li><strong>Margin Added:</strong> + <code>0.10</code> margin.</li>
+            <li><strong>Calculated Limit:</strong> <code>0.12 + 0.10 = 0.22</code>.</li>
+            <li><strong>Hard Caps:</strong> Constrained between <code>0.12</code> and <code>0.50</code>. Selected: <code>0.22</code>.</li>
+        </ul>
+
+        <!-- STEP 6 -->
+        <h2 id="step6"><span class="step-badge">6</span> Saving the Registration to Disk</h2>
+
+        <p>With all thresholds perfectly tuned to the individual's natural hand movements, <code>save_registration()</code> writes to disk.</p>
+
+        <pre>templates/saimani/
+├── gesture_1.npy
+├── gesture_2.npy
+├── gesture_3.npy
+├── gesture_4.npy
+├── gesture_5.npy
+└── config.json</pre>
+
+        <p>The <code>config.json</code> stores the limits permanently:</p>
+        <pre>{
+  "threshold": 2.3094,
+  "finger_state_threshold": 0.2233,
+  "transition_threshold": 0.3657,
+  "segment_threshold": 0.3800,
+  "num_samples": 5,
+  "threshold_method": "statistical_v2",
+  "consistency_score": 85.4
+}</pre>
+
+        <!-- WALKTHROUGH -->
+        <h2 id="walkthrough"><span class="step-badge">★</span> Concrete Walkthrough: "Alice" Registers</h2>
+
+        <div class="alert alert-info">
+            <div class="alert-title">Scenario</div>
+            Alice decides to use a simple "Hand Wave" as her biometric password.
+        </div>
+
+        <ol>
+            <li><strong>Sample 1:</strong> Alice presses <code>[R]</code>, waves. Captured 75 frames. Resampled to 60.</li>
+            <li><strong>Sample 2:</strong> Alice waves slightly faster. Captured 82 frames. Resampled to 60.</li>
+            <li><strong>Sample 3:</strong> 70 frames captured. Resampled to 60.</li>
+            <li><strong>Sample 4:</strong> 78 frames captured. Resampled to 60.</li>
+            <li><strong>Sample 5:</strong> 72 frames captured. Resampled to 60.</li>
+        </ol>
+
+        <h3>The Calibration Engine Result</h3>
+        <p>Because temporal normalization squashed/stretched all waves to exactly 60 frames, the fact that Sample 2 was "faster" does not mathematically matter.</p>
+        
+        <p>When comparing Sample 1 to Sample 2, the DTW distance is a tiny <code>1.1</code>. The transition sequence for Sample 1 is exactly identical to Sample 2, making the dissimilarity <code>0.0</code>.</p>
+        
+        <p>After analyzing all 10 pairs, the engine realizes Alice is <strong>highly consistent</strong>. Her thresholds are set extremely tight (hitting the minimum floors for DTW at <code>2.0</code> and Transition at <code>0.10</code>).</p>
+        
+        <p>Because her thresholds are so tight, an attacker trying to mimic her wave with slightly incorrect finger timing will be immediately rejected. The capture pipeline has successfully personalized the AI's sensitivity perfectly for Alice!</p>
+
+    </main>
+</div>
+
+</body>
+</html>

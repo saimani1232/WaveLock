@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WaveLock — Authentication Deep Dive</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface-hover: #1c2333;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79c0ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --orange: #d29922;
+            --purple: #bc8cff;
+            --cyan: #39d2c0;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* ─── Hero ─── */
+        .hero {
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 40%, #1a1e2e 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 60px 20px 50px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%; left: -50%;
+            width: 200%; height: 200%;
+            background: radial-gradient(circle at 30% 50%, rgba(88,166,255,0.05) 0%, transparent 60%),
+                        radial-gradient(circle at 70% 30%, rgba(188,140,255,0.04) 0%, transparent 50%);
+            pointer-events: none;
+        }
+        .hero h1 { font-size: 2.6rem; font-weight: 800; margin-bottom: 10px; position: relative; }
+        .hero .subtitle { color: var(--text-muted); font-size: 1.1rem; position: relative; max-width: 700px; margin: 0 auto; }
+        .hero .badge {
+            display: inline-block; margin-top: 18px;
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 6px 16px; border-radius: 20px;
+            font-size: 0.85rem; color: var(--accent);
+            position: relative;
+        }
+
+        /* ─── Layout ─── */
+        .layout { display: flex; max-width: 1400px; margin: 0 auto; }
+
+        /* ─── Sidebar ─── */
+        .sidebar {
+            width: 280px; min-width: 280px;
+            position: sticky; top: 0; height: 100vh;
+            overflow-y: auto; padding: 24px 16px;
+            border-right: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .sidebar h3 { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1.2px; margin: 20px 0 8px; }
+        .sidebar a {
+            display: block; padding: 6px 12px; border-radius: 6px;
+            color: var(--text-muted); text-decoration: none; font-size: 0.85rem;
+            transition: all 0.15s;
+        }
+        .sidebar a:hover { background: var(--surface-hover); color: var(--text); }
+        .sidebar .step-num {
+            display: inline-block; width: 22px; height: 22px; line-height: 22px;
+            text-align: center; border-radius: 50%;
+            background: var(--border); color: var(--text-muted);
+            font-size: 0.7rem; font-weight: 700; margin-right: 6px;
+        }
+
+        /* ─── Main Content ─── */
+        .content {
+            flex: 1; padding: 40px 50px; max-width: 900px;
+        }
+
+        h2 {
+            font-size: 1.6rem; font-weight: 700;
+            margin: 48px 0 16px; padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; gap: 12px;
+        }
+        h2 .step-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 36px; height: 36px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent), var(--purple));
+            color: white; font-size: 0.9rem; font-weight: 800; flex-shrink: 0;
+        }
+        h3 { font-size: 1.15rem; margin: 28px 0 10px; color: var(--accent); }
+        h4 { font-size: 1rem; margin: 20px 0 8px; color: var(--purple); }
+
+        p { margin: 10px 0; }
+
+        pre {
+            background: #0d1117; border: 1px solid var(--border);
+            border-radius: 8px; padding: 16px 20px;
+            overflow-x: auto; font-size: 0.85rem;
+            line-height: 1.5; margin: 14px 0;
+            font-family: 'Fira Code', 'Cascadia Code', monospace;
+        }
+        code {
+            font-family: 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 0.88em;
+        }
+        p code, li code, td code {
+            background: rgba(88,166,255,0.1); color: var(--accent);
+            padding: 2px 6px; border-radius: 4px;
+        }
+
+        /* ─── Tables ─── */
+        table {
+            width: 100%; border-collapse: collapse;
+            margin: 14px 0; font-size: 0.9rem;
+        }
+        th {
+            background: var(--surface); padding: 10px 14px;
+            text-align: left; font-weight: 600; border-bottom: 2px solid var(--border);
+        }
+        td {
+            padding: 8px 14px; border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        tr:hover td { background: var(--surface-hover); }
+
+        /* ─── Alert Boxes ─── */
+        .alert {
+            border-radius: 8px; padding: 16px 20px;
+            margin: 16px 0; border-left: 4px solid;
+        }
+        .alert-info { background: rgba(88,166,255,0.08); border-color: var(--accent); }
+        .alert-warning { background: rgba(210,153,34,0.08); border-color: var(--orange); }
+        .alert-success { background: rgba(63,185,80,0.08); border-color: var(--green); }
+        .alert-danger { background: rgba(248,81,73,0.08); border-color: var(--red); }
+        .alert-title { font-weight: 700; margin-bottom: 6px; }
+        .alert-info .alert-title { color: var(--accent); }
+        .alert-warning .alert-title { color: var(--orange); }
+        .alert-success .alert-title { color: var(--green); }
+        .alert-danger .alert-title { color: var(--red); }
+
+        /* ─── Gate Cards ─── */
+        .gate-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 20px 24px; margin: 16px 0;
+            border-left: 4px solid;
+        }
+        .gate-card.gate1 { border-left-color: var(--accent); }
+        .gate-card.gate2 { border-left-color: var(--green); }
+        .gate-card.gate3 { border-left-color: var(--purple); }
+        .gate-card.gate4 { border-left-color: var(--orange); }
+        .gate-card h4 { margin-top: 0; }
+
+        /* ─── Pass/Fail Badges ─── */
+        .pass { color: var(--green); font-weight: 700; }
+        .fail { color: var(--red); font-weight: 700; }
+        .warn { color: var(--orange); font-weight: 700; }
+
+        /* ─── Comparison Grid ─── */
+        .comparison {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 16px; margin: 16px 0;
+        }
+        .comparison-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 18px; border-top: 3px solid;
+        }
+        .comparison-card.correct { border-top-color: var(--green); }
+        .comparison-card.attack { border-top-color: var(--red); }
+        .comparison-card h4 { margin-top: 0; }
+
+        ul, ol { margin: 8px 0 8px 24px; }
+        li { margin: 4px 0; }
+
+        @media (max-width: 900px) {
+            .sidebar { display: none; }
+            .content { padding: 24px; }
+            .comparison { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <h1>🔍 Authentication Deep Dive</h1>
+    <div class="subtitle">
+        The complete, step-by-step sequence of what happens when a user authenticates in WaveLock — from keystroke to decision.
+    </div>
+    <span class="badge">WaveLock Gesture Authentication System</span>
+</div>
+
+<div class="layout">
+    <nav class="sidebar">
+        <h3>Pipeline Steps</h3>
+        <a href="#step0"><span class="step-num">0</span> Startup & User Selection</a>
+        <a href="#step1"><span class="step-num">1</span> Webcam & MediaPipe Init</a>
+        <a href="#step2"><span class="step-num">2</span> Hand Detection</a>
+        <a href="#step3"><span class="step-num">3</span> Recording (3 sec)</a>
+        <a href="#step4"><span class="step-num">4</span> Spatial Normalization</a>
+        <a href="#step5"><span class="step-num">5</span> Temporal Normalization</a>
+        <h3>Security Gates</h3>
+        <a href="#gate1"><span class="step-num">1</span> DTW Distance</a>
+        <a href="#gate2"><span class="step-num">2</span> Finger State Average</a>
+        <a href="#gate3"><span class="step-num">3</span> Transition Order (NEW)</a>
+        <a href="#gate4"><span class="step-num">4</span> Segment Max (NEW)</a>
+        <h3>Decision & Results</h3>
+        <a href="#decision">Authentication Decision</a>
+        <a href="#display">Result Display</a>
+        <h3>Deep Dive</h3>
+        <a href="#walkthrough">Correct vs Attack</a>
+        <a href="#calibration">Threshold Calibration</a>
+        <a href="#reference">Quick Reference</a>
+    </nav>
+
+    <main class="content">
+
+        <!-- ───── STEP 0 ───── -->
+        <h2 id="step0"><span class="step-badge">0</span> Startup & User Selection</h2>
+
+        <p>When you run <code>python gesture_auth.py</code>, the <code>main()</code> function executes a startup sequence:</p>
+
+        <h3>a) Banner & User List</h3>
+        <pre>==========================================================
+   GESTURE AUTH — Biometric Authentication System
+==========================================================
+
+  Registered users: saimani, testing
+
+  Enter your username: saimani</pre>
+
+        <p><code>list_registered_users()</code> scans the <code>templates/</code> directory for folders containing <code>gesture_1.npy</code> (or legacy <code>gesture.npy</code>).</p>
+
+        <h3>b) Load Templates</h3>
+        <p><code>load_all_user_templates("saimani")</code> loads every <code>.npy</code> file as a NumPy array:</p>
+        <pre># Result: list of 5 arrays, each shape (60, 21, 3)
+templates = [
+    np.load("templates/saimani/gesture_1.npy"),   # (60, 21, 3)
+    np.load("templates/saimani/gesture_2.npy"),   # (60, 21, 3)
+    np.load("templates/saimani/gesture_3.npy"),   # (60, 21, 3)
+    np.load("templates/saimani/gesture_4.npy"),   # (60, 21, 3)
+    np.load("templates/saimani/gesture_5.npy"),   # (60, 21, 3)
+]</pre>
+
+        <h3>c) Load All 4 Thresholds</h3>
+        <p>From <code>templates/saimani/config.json</code>:</p>
+        <pre>{
+  "threshold": 2.3094,
+  "finger_state_threshold": 0.2233,
+  "transition_threshold": 0.3657,
+  "segment_threshold": 0.3800,
+  "num_samples": 5,
+  "threshold_method": "statistical_v2",
+  "consistency_score": 74.83
+}</pre>
+        <pre>  Loaded 5 template(s) for 'saimani'
+  Authentication threshold: 2.3094
+  Finger mismatch limit:    0.2233
+  Transition order limit:   0.3657
+  Segment mismatch limit:   0.3800</pre>
+
+        <div class="alert alert-info">
+            <div class="alert-title">💡 Backward Compatibility</div>
+            If config.json lacks <code>transition_threshold</code> or <code>segment_threshold</code> (old registration), the system computes them on-the-fly from saved templates using <code>load_user_transition_threshold()</code> and <code>load_user_segment_threshold()</code>.
+        </div>
+
+        <!-- ───── STEP 1 ───── -->
+        <h2 id="step1"><span class="step-badge">1</span> Webcam & MediaPipe Initialization</h2>
+
+        <h3>MediaPipe Setup</h3>
+        <pre>hands = mp_hands.Hands(
+    static_image_mode=False,      # Video mode (faster tracking)
+    max_num_hands=1,              # Track one hand only
+    min_detection_confidence=0.7, # 70% confidence to detect
+    min_tracking_confidence=0.5,  # 50% confidence to keep tracking
+)</pre>
+
+        <h3>Camera Setup</h3>
+        <p>OpenCV opens the default webcam at 640×480 resolution. A named window "WaveLock — Authenticate" is created.</p>
+
+        <h3>Main Loop Structure</h3>
+        <table>
+            <tr><th>State</th><th>What Happens</th><th>Transitions</th></tr>
+            <tr><td><strong>Idle</strong></td><td>Shows live feed with hand tracking overlay</td><td>Press [R] → Recording</td></tr>
+            <tr><td><strong>Recording</strong></td><td>Captures landmarks for 3 seconds, shows progress bar</td><td>3s elapsed → Processing</td></tr>
+            <tr><td><strong>Result</strong></td><td>Shows GRANTED/DENIED overlay with scores</td><td>[T] → Idle, [Q] → Exit</td></tr>
+        </table>
+
+        <!-- ───── STEP 2 ───── -->
+        <h2 id="step2"><span class="step-badge">2</span> Hand Detection & Landmark Extraction</h2>
+
+        <h3>The 21 Landmarks</h3>
+        <p>MediaPipe detects 21 3D points on the hand. Each has (x, y, z) coordinates:</p>
+        <table>
+            <tr><th>Index</th><th>Name</th><th>x, y</th><th>z</th></tr>
+            <tr><td>0</td><td>WRIST</td><td>0.0 – 1.0 (fraction of frame)</td><td>Depth relative to wrist</td></tr>
+            <tr><td>1-4</td><td>THUMB (CMC → TIP)</td><td>0.0 – 1.0</td><td>~-0.3 to 0.3</td></tr>
+            <tr><td>5-8</td><td>INDEX (MCP → TIP)</td><td>0.0 – 1.0</td><td>~-0.3 to 0.3</td></tr>
+            <tr><td>9-12</td><td>MIDDLE (MCP → TIP)</td><td>0.0 – 1.0</td><td>~-0.3 to 0.3</td></tr>
+            <tr><td>13-16</td><td>RING (MCP → TIP)</td><td>0.0 – 1.0</td><td>~-0.3 to 0.3</td></tr>
+            <tr><td>17-20</td><td>PINKY (MCP → TIP)</td><td>0.0 – 1.0</td><td>~-0.3 to 0.3</td></tr>
+        </table>
+
+        <h3>Extraction Code</h3>
+        <p><code>extract_landmarks()</code> in <code>landmarks.py</code> converts MediaPipe landmarks to a NumPy array of shape <code>(21, 3)</code>:</p>
+        <pre>landmarks = np.array(
+    [[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark],
+    dtype=np.float64
+)   # Shape: (21, 3)</pre>
+
+        <!-- ───── STEP 3 ───── -->
+        <h2 id="step3"><span class="step-badge">3</span> Recording the Gesture (3 seconds)</h2>
+
+        <p>When user presses <code>[R]</code> and a hand is visible:</p>
+        <ol>
+            <li>Timer starts: <code>recording_start_time = time.time()</code></li>
+            <li>For each frame during 3 seconds: extract landmarks → append to <code>recorded_frames</code> list</li>
+            <li>If hand disappears mid-recording → that frame is skipped (warning shown)</li>
+            <li>Progress bar fills up on screen (red recording dot blinks)</li>
+        </ol>
+
+        <p><strong>After 3 seconds:</strong></p>
+        <pre># Typical: 70-80 frames at 25-30 FPS
+if len(recorded_frames) &lt; 10:
+    print("Too few frames")     # Reject immediately
+else:
+    raw = np.array(recorded_frames)   # Shape: (N, 21, 3)
+    normalized = normalize_gesture(raw, TARGET_FRAMES=60)  # → (60, 21, 3)</pre>
+
+        <!-- ───── STEP 4 ───── -->
+        <h2 id="step4"><span class="step-badge">4</span> Spatial Normalization</h2>
+
+        <p><strong>Goal:</strong> Make the gesture invariant to hand position in frame, distance from camera, and hand size.</p>
+
+        <h3>Step 4a: Translation — Center on Wrist</h3>
+        <p>Subtract the wrist position from ALL landmarks:</p>
+        <pre>wrist = frame_landmarks[0].copy()   # e.g., [0.4521, 0.8234, 0.0000]
+frame_landmarks -= wrist             # Wrist becomes [0, 0, 0]</pre>
+
+        <h4>Concrete Example</h4>
+        <table>
+            <tr><th>Landmark</th><th>Before (raw)</th><th>After translation</th></tr>
+            <tr><td>0 WRIST</td><td>[0.452, 0.823, 0.000]</td><td>[0.000, 0.000, 0.000]</td></tr>
+            <tr><td>8 INDEX_TIP</td><td>[0.402, 0.412, -0.089]</td><td>[-0.051, -0.411, -0.089]</td></tr>
+            <tr><td>12 MIDDLE_TIP</td><td>[0.440, 0.399, -0.081]</td><td>[-0.012, -0.425, -0.081]</td></tr>
+        </table>
+
+        <div class="alert alert-info">
+            <div class="alert-title">💡 Why center on wrist?</div>
+            Without this, the same gesture in the top-left vs bottom-right of the frame would have completely different coordinates. Centering makes position irrelevant.
+        </div>
+
+        <h3>Step 4b: Scaling — Normalize to Unit Sphere</h3>
+        <p>Divide all coordinates by the maximum distance from wrist:</p>
+        <pre>distances = np.linalg.norm(landmarks, axis=1)   # Per-landmark distance
+max_dist = np.max(distances)                      # e.g., 0.4247
+landmarks /= max_dist                             # Furthest landmark → distance 1.0</pre>
+
+        <h4>Concrete Example (continuing)</h4>
+        <table>
+            <tr><th>Landmark</th><th>After translation</th><th>After scaling (÷ 0.4247)</th></tr>
+            <tr><td>0 WRIST</td><td>[0.000, 0.000, 0.000]</td><td>[0.000, 0.000, 0.000]</td></tr>
+            <tr><td>8 INDEX_TIP</td><td>[-0.051, -0.411, -0.089]</td><td>[-0.119, -0.968, -0.210]</td></tr>
+            <tr><td>12 MIDDLE_TIP</td><td>[-0.012, -0.425, -0.081]</td><td>[-0.029, -1.000, -0.191]</td></tr>
+        </table>
+
+        <div class="alert alert-info">
+            <div class="alert-title">💡 Why scale?</div>
+            Without this, someone 50cm from the camera gets different values than someone 80cm away, even for the exact same gesture. Scaling makes all hands the same "size."
+        </div>
+
+        <!-- ───── STEP 5 ───── -->
+        <h2 id="step5"><span class="step-badge">5</span> Temporal Normalization</h2>
+
+        <p><strong>Goal:</strong> Make the gesture invariant to performance speed.</p>
+
+        <h3>The Problem</h3>
+        <p>You record 74 frames in one attempt and 82 in another. You can't compare them frame-by-frame because they have different lengths.</p>
+
+        <h3>The Solution: Resample to 60 Frames</h3>
+        <pre># Flatten: (N, 21, 3) → (N, 63)
+flat = gesture.reshape(n_frames, 63)
+
+# Create time indices
+original_t = np.linspace(0.0, 1.0, n_frames)   # 74 points: 0 to 1
+target_t   = np.linspace(0.0, 1.0, 60)          # 60 points: 0 to 1
+
+# Interpolate each feature along time
+resampled = interp1d(original_t, flat, axis=0)(target_t)
+# Shape: (60, 63) → reshape to (60, 21, 3)</pre>
+
+        <h4>Simple Example: 4 frames → 3 frames</h4>
+        <pre>Original:     Frame 0    Frame 1    Frame 2    Frame 3
+Time:         0.000      0.333      0.667      1.000
+Fingertip x:  0.10       0.30       0.70       0.90
+
+Resampled:    Frame 0    Frame 1    Frame 2
+Time:         0.000      0.500      1.000
+Fingertip x:  0.10       0.50       0.90
+                ↑           ↑          ↑
+             (exact)    (interpolated) (exact)</pre>
+
+        <div class="alert alert-success">
+            <div class="alert-title">✅ After normalization</div>
+            The gesture is now a <code>(60, 21, 3)</code> NumPy array — exactly the same shape as stored templates. Ready for comparison.
+        </div>
+
+        <!-- ───── GATE 1 ───── -->
+        <h2 id="gate1"><span class="step-badge">G1</span> Security Gate 1 — DTW Distance</h2>
+
+        <div class="gate-card gate1">
+            <h4>🎯 What it measures: Overall hand motion trajectory similarity</h4>
+            <p><strong>Function:</strong> <code>compute_dtw_distance()</code> — Flattens (60,21,3) → (60,63) and uses <code>dtaidistance.dtw_ndim.distance()</code></p>
+        </div>
+
+        <h3>What is Dynamic Time Warping?</h3>
+        <p>DTW finds the optimal alignment between two time sequences, even if performed at slightly different speeds in different portions. Unlike simple frame-by-frame comparison, DTW can "warp" time.</p>
+
+        <h3>How It Works</h3>
+        <p>Imagine two 5-frame sequences. DTW builds a <strong>cost matrix</strong> where cell (i,j) = Euclidean distance between frame i of sequence A and frame j of sequence B. Then it finds the cheapest path:</p>
+        <pre>                 Sequence B frames
+                 0    1    2    3    4
+Seq A   0    [ 0.1  0.5  0.8  1.2  1.5 ]
+frames  1    [ 0.4  0.1  0.4  0.9  1.3 ]
+        2    [ 0.9  0.3  0.1  0.3  0.8 ]
+        3    [ 1.3  0.8  0.3  0.1  0.4 ]
+        4    [ 1.6  1.2  0.7  0.3  0.1 ]
+
+Warping path: (0,0)→(1,1)→(2,2)→(3,3)→(4,4) ← diagonal = synchronized
+Total cost = 0.1 + 0.1 + 0.1 + 0.1 + 0.1 = 0.5</pre>
+
+        <h3>Distance Interpretation</h3>
+        <table>
+            <tr><th>Distance</th><th>Meaning</th></tr>
+            <tr><td>0.0</td><td>Identical gestures</td></tr>
+            <tr><td>0.5 – 1.5</td><td>Very similar (same gesture, same person)</td></tr>
+            <tr><td>1.5 – 2.5</td><td>Moderately similar (some variation)</td></tr>
+            <tr><td>3.0+</td><td>Different gestures or different people</td></tr>
+        </table>
+
+        <p><strong>Gate check:</strong> <code>distance ≤ threshold</code> (e.g., ≤ 2.3094)</p>
+
+        <!-- ───── GATE 2 ───── -->
+        <h2 id="gate2"><span class="step-badge">G2</span> Security Gate 2 — Finger State Average Mismatch</h2>
+
+        <div class="gate-card gate2">
+            <h4>🖐️ What it measures: Whether the correct fingers were used on average</h4>
+            <p><strong>Function:</strong> <code>compute_finger_state_mismatch()</code></p>
+        </div>
+
+        <h3>Finger Extension Detection</h3>
+        <p>Two criteria must <strong>both</strong> be true for a finger to count as "extended":</p>
+        <table>
+            <tr><th>Criterion</th><th>Rule</th><th>Intuition</th></tr>
+            <tr><td>Joint Angle</td><td>MCP→PIP→TIP angle ≥ 150°</td><td>Straight finger ≈ 180°, bent ≈ 60°</td></tr>
+            <tr><td>Tip Distance</td><td>Tip farther from wrist than reference joint × 1.02</td><td>Extended fingers reach further</td></tr>
+        </table>
+
+        <h3>Per-Frame Binary State</h3>
+        <pre>Frame 10: [0, 1, 0, 0, 0]   ← only index up
+Frame 20: [0, 1, 1, 0, 0]   ← index + middle
+Frame 30: [0, 1, 1, 1, 0]   ← index + middle + ring
+Frame 40: [0, 1, 1, 1, 1]   ← all four up
+(index 0=thumb, 1=index, 2=middle, 3=ring, 4=pinky)</pre>
+
+        <h3>Computing the Average Mismatch</h3>
+        <pre>Frame 10: live=[0,1,0,0,0]  template=[0,1,0,0,0]  diff=0.00
+Frame 20: live=[0,1,1,0,0]  template=[0,1,1,0,0]  diff=0.00
+Frame 30: live=[0,1,1,0,0]  template=[0,1,1,1,0]  diff=0.20 ← ring missing!
+Frame 40: live=[0,1,1,0,1]  template=[0,1,1,1,1]  diff=0.20 ← ring missing!
+...
+Overall average across 60 frames: 0.1167</pre>
+
+        <div class="alert alert-warning">
+            <div class="alert-title">⚠️ Known Weakness</div>
+            If 50/60 frames match and only 10 differ, the average is still low (~0.12). This is exactly how the "1-2-3" attack bypassed the old 2-gate system.
+        </div>
+
+        <p><strong>Gate check:</strong> <code>mismatch ≤ finger_state_threshold</code> (e.g., ≤ 0.2233)</p>
+
+        <!-- ───── GATE 3 ───── -->
+        <h2 id="gate3"><span class="step-badge">G3</span> Security Gate 3 — Finger Transition Order <span style="color:var(--purple);font-size:0.8rem;vertical-align:middle">● NEW</span></h2>
+
+        <div class="gate-card gate3">
+            <h4>🔢 What it measures: The ORDER in which fingers change state</h4>
+            <p><strong>Functions:</strong> <code>extract_finger_transitions()</code>, <code>compute_transition_dissimilarity()</code>, <code>_levenshtein_distance()</code></p>
+        </div>
+
+        <div class="alert alert-danger">
+            <div class="alert-title">🛡️ This gate was added to catch the "1-2-3 vs 1-2-4-3" attack</div>
+            DTW and finger state average can't distinguish between gestures that use similar motions but in a different ORDER. This gate compares the exact sequence of finger raise/drop events.
+        </div>
+
+        <h3>Step 1: Smooth Finger States</h3>
+        <p>Raw detection can flicker. A <strong>majority-vote window of 5 frames</strong> eliminates noise:</p>
+        <pre>Raw:      [0, 1, 0, 1, 1, 1, 1, 0, 1, 1]
+Smoothed: [0, 0, 1, 1, 1, 1, 1, 1, 1, 1]
+           ↑  ↑                    ↑
+       Flicker removed        Flicker removed</pre>
+
+        <h3>Step 2: Extract Transition Sequence</h3>
+        <p>Walk through smoothed states, record every state change. <strong>Thumb is excluded</strong> (too noisy for detection).</p>
+        <pre>Gesture "1-2-4-3" (raise index, middle, ring, pinky):
+
+Frame  1-10: [0,0,0,0,0] → all down
+Frame 11:    [0,1,0,0,0] → INDEX goes UP     → (1, 'up')
+Frame 21:    [0,1,1,0,0] → MIDDLE goes UP    → (2, 'up')
+Frame 31:    [0,1,1,1,0] → RING goes UP      → (3, 'up')
+Frame 41:    [0,1,1,1,1] → PINKY goes UP     → (4, 'up')
+Frame 55:    [0,1,1,1,0] → PINKY goes DOWN   → (4, 'down')
+
+Result: [(1,'up'), (2,'up'), (3,'up'), (4,'up'), (4,'down')]</pre>
+
+        <h3>Step 3: Levenshtein Edit Distance</h3>
+        <p>The <strong>edit distance</strong> counts the minimum insertions, deletions, and substitutions to transform one sequence into another.</p>
+
+        <h4>Worked DP Table Example</h4>
+        <p>Template: <code>[(1,up), (2,up), (3,up), (4,up)]</code> vs Attack: <code>[(1,up), (2,up), (4,up)]</code></p>
+
+        <pre>         ""    (1,up)  (2,up)  (4,up)
+  ""      0      1       2       3
+(1,up)    1      0       1       2
+(2,up)    2      1       0       1
+(3,up)    3      2       1       1   ← (3,up)≠(4,up), min(1,1,0)+1=1
+(4,up)    4      3       2       1   ← (4,up)=(4,up), copy diagonal=1
+
+Edit distance = 1
+Normalized = 1/4 = 0.25</pre>
+
+        <h4>Wrong Order Example</h4>
+        <p>Template: <code>[(1,up), (2,up), (3,up), (4,up)]</code> vs <code>[(1,up), (3,up), (2,up), (4,up)]</code></p>
+        <pre>Edit distance = 2 (substitutions at positions 2 and 3)
+Normalized = 2/4 = 0.50</pre>
+
+        <p><strong>Gate check:</strong> <code>dissimilarity ≤ transition_threshold</code> (e.g., ≤ 0.3657)</p>
+
+        <!-- ───── GATE 4 ───── -->
+        <h2 id="gate4"><span class="step-badge">G4</span> Security Gate 4 — Segment Max Mismatch <span style="color:var(--orange);font-size:0.8rem;vertical-align:middle">● NEW</span></h2>
+
+        <div class="gate-card gate4">
+            <h4>📊 What it measures: Worst-case finger accuracy in any time window</h4>
+            <p><strong>Function:</strong> <code>compute_segment_max_mismatch()</code></p>
+        </div>
+
+        <h3>Why Average Misses, Max Catches</h3>
+        <p>Gate 2 averages across ALL 60 frames. If 50 match and 10 don't, the average is low. This gate divides into <strong>6 segments of 10 frames</strong> and uses the <strong>MAXIMUM</strong>.</p>
+
+        <pre>Segment 0 (frames  0-9):  mismatch = 0.00  ← Both start same
+Segment 1 (frames 10-19): mismatch = 0.04
+Segment 2 (frames 20-29): mismatch = 0.08
+Segment 3 (frames 30-39): mismatch = 0.24  ← RING should be up!
+Segment 4 (frames 40-49): mismatch = 0.20  ← Still wrong
+Segment 5 (frames 50-59): mismatch = 0.16
+
+Gate 2 (average): (0+0.04+0.08+0.24+0.20+0.16) / 6 = 0.12 → PASSES ⚠️
+Gate 4 (max):     max(all) = 0.24                     → May FAIL ✅</pre>
+
+        <p><strong>Gate check:</strong> <code>max_segment_mismatch ≤ segment_threshold</code> (e.g., ≤ 0.3800)</p>
+
+        <!-- ───── DECISION ───── -->
+        <h2 id="decision">The Authentication Decision</h2>
+
+        <p>Inside <code>authenticate_with_details()</code>, the live gesture is compared against <strong>every</strong> stored template. For each template:</p>
+
+        <pre>comparisons = []
+for template in stored_templates:
+    Gate 1: distance     = compute_dtw_distance(live, template)
+    Gate 2: finger_mm    = compute_finger_state_mismatch(live, template)
+    Gate 3: trans_dissim = compute_transition_dissimilarity(live, template)
+    Gate 4: seg_max      = compute_segment_max_mismatch(live, template)
+
+# Find templates that pass ALL 4 gates
+passing = [t for t in comparisons
+           if passes_distance AND passes_finger
+           AND passes_transition AND passes_segment]
+
+if passing:
+    best = min(passing, key=distance)  → ACCESS GRANTED
+else:
+    best = min(comparisons, key=distance)  → ACCESS DENIED</pre>
+
+        <p>When denied, the failure reason lists every gate that failed: e.g., <code>transition_order_and_segment_mismatch</code>.</p>
+
+        <!-- ───── DISPLAY ───── -->
+        <h2 id="display">Result Display</h2>
+
+        <h3>Terminal Output</h3>
+        <pre>  =============================
+     ACCESS GRANTED
+  =============================
+  DTW Distance:    1.0892  (best match: sample 5)
+  Threshold:       2.3094
+  Finger mismatch: 0.1767
+  Finger limit:    0.2233
+  Transition diff: 0.0000
+  Transition limit: 0.3657
+  Segment max:     0.0800
+  Segment limit:   0.3800
+  Frames captured: 74</pre>
+
+        <h3>UI Overlay</h3>
+        <p>A semi-transparent overlay covers the webcam window:</p>
+        <ul>
+            <li><strong style="color:var(--green)">Green</strong> = GRANTED, <strong style="color:var(--red)">Red</strong> = DENIED</li>
+            <li>Line 1: DTW score / threshold | Finger mismatch / limit</li>
+            <li>Line 2: Transition order / limit | Segment max / limit</li>
+            <li>"Press [T] to try again | Press [Q] to quit"</li>
+        </ul>
+
+        <!-- ───── WALKTHROUGH ───── -->
+        <h2 id="walkthrough">Complete Walkthrough: Correct vs Attack</h2>
+
+        <p><strong>User:</strong> saimani &nbsp;|&nbsp; <strong>Gesture:</strong> "1-2-4-3" (raise index → middle → ring → pinky) &nbsp;|&nbsp; <strong>Templates:</strong> 5</p>
+
+        <div class="comparison">
+            <div class="comparison-card correct">
+                <h4 style="color:var(--green)">✅ Correct: "1-2-4-3"</h4>
+                <table>
+                    <tr><td>Gate 1: DTW</td><td class="pass">1.09 ≤ 2.31 ✓</td></tr>
+                    <tr><td>Gate 2: Finger Avg</td><td class="pass">0.14 ≤ 0.22 ✓</td></tr>
+                    <tr><td>Gate 3: Transition</td><td class="pass">0.00 ≤ 0.37 ✓</td></tr>
+                    <tr><td>Gate 4: Segment Max</td><td class="pass">0.08 ≤ 0.38 ✓</td></tr>
+                    <tr><td colspan="2" class="pass" style="text-align:center;font-size:1.1rem">ACCESS GRANTED</td></tr>
+                </table>
+            </div>
+            <div class="comparison-card attack">
+                <h4 style="color:var(--red)">❌ Attack: "1-2-3" (skip ring)</h4>
+                <table>
+                    <tr><td>Gate 1: DTW</td><td class="warn">2.11 ≤ 2.31 ⚠️</td></tr>
+                    <tr><td>Gate 2: Finger Avg</td><td class="warn">0.12 ≤ 0.22 ⚠️</td></tr>
+                    <tr><td>Gate 3: Transition</td><td class="fail">0.25 → caught after re-register</td></tr>
+                    <tr><td>Gate 4: Segment Max</td><td class="fail">0.24 → caught after re-register</td></tr>
+                    <tr><td colspan="2" class="fail" style="text-align:center;font-size:1.1rem">ACCESS DENIED</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="comparison">
+            <div class="comparison-card attack">
+                <h4 style="color:var(--red)">❌ Attack: "1-3-2-4" (wrong order)</h4>
+                <table>
+                    <tr><td>Gate 1: DTW</td><td class="warn">2.05 ≤ 2.31 ⚠️</td></tr>
+                    <tr><td>Gate 2: Finger Avg</td><td class="warn">0.18 ≤ 0.22 ⚠️</td></tr>
+                    <tr><td>Gate 3: Transition</td><td class="fail">0.50 > 0.37 ✗</td></tr>
+                    <tr><td>Gate 4: Segment Max</td><td class="fail">0.40 > 0.38 ✗</td></tr>
+                    <tr><td colspan="2" class="fail" style="text-align:center;font-size:1.1rem">ACCESS DENIED</td></tr>
+                </table>
+            </div>
+            <div class="comparison-card attack">
+                <h4 style="color:var(--red)">❌ Attack: Completely different gesture</h4>
+                <table>
+                    <tr><td>Gate 1: DTW</td><td class="fail">4.82 > 2.31 ✗</td></tr>
+                    <tr><td>Gate 2: Finger Avg</td><td class="fail">0.45 > 0.22 ✗</td></tr>
+                    <tr><td>Gate 3: Transition</td><td class="fail">1.00 > 0.37 ✗</td></tr>
+                    <tr><td>Gate 4: Segment Max</td><td class="fail">0.60 > 0.38 ✗</td></tr>
+                    <tr><td colspan="2" class="fail" style="text-align:center;font-size:1.1rem">ACCESS DENIED</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- ───── CALIBRATION ───── -->
+        <h2 id="calibration">Threshold Calibration During Registration</h2>
+
+        <p>During registration, the user records 5 samples. All 10 pairwise combinations are compared to find the natural variation:</p>
+
+        <table>
+            <tr><th>Gate</th><th>Formula</th><th>Margin</th><th>Hard Caps</th></tr>
+            <tr><td>DTW</td><td>max(mean + 2×std, P90 × 1.15)</td><td>1.25 × max</td><td>Floor: 2.0</td></tr>
+            <tr><td>Finger Avg</td><td>max_mismatch + margin</td><td>0.08</td><td>[0.12, 0.30]</td></tr>
+            <tr><td>Transition Order</td><td>max_dissimilarity + margin</td><td>0.08</td><td>[0.10, 0.40]</td></tr>
+            <tr><td>Segment Max</td><td>max_max_mismatch + margin</td><td>0.10</td><td>[0.12, 0.50]</td></tr>
+        </table>
+
+        <div class="alert alert-success">
+            <div class="alert-title">💡 Key Insight</div>
+            Thresholds are personalized per-user. A user who performs their gesture very consistently gets tight thresholds (high security). A user with more variation gets slightly looser thresholds (usability). The caps prevent them from becoming too permissive.
+        </div>
+
+        <!-- ───── REFERENCE ───── -->
+        <h2 id="reference">Quick Reference</h2>
+
+        <table>
+            <tr><th>#</th><th>Gate</th><th>Measures</th><th>Config Key</th><th>Catches</th></tr>
+            <tr><td>1</td><td><strong>DTW Distance</strong></td><td>Motion trajectory similarity</td><td><code>threshold</code></td><td>Completely different gestures</td></tr>
+            <tr><td>2</td><td><strong>Finger State Avg</strong></td><td>Average correct finger usage</td><td><code>finger_state_threshold</code></td><td>Wrong fingers used throughout</td></tr>
+            <tr><td>3</td><td><strong>Transition Order</strong></td><td>Finger change sequence</td><td><code>transition_threshold</code></td><td>Right fingers, wrong ORDER</td></tr>
+            <tr><td>4</td><td><strong>Segment Max</strong></td><td>Worst-case segment accuracy</td><td><code>segment_threshold</code></td><td>Localized finger spoofing</td></tr>
+        </table>
+
+        <h3>Key Constants</h3>
+        <table>
+            <tr><th>Constant</th><th>Value</th><th>File</th></tr>
+            <tr><td><code>RECORDING_DURATION_SEC</code></td><td>3</td><td>gesture_capture.py</td></tr>
+            <tr><td><code>TARGET_FRAMES</code></td><td>60</td><td>gesture_capture.py</td></tr>
+            <tr><td><code>NUM_REGISTRATION_SAMPLES</code></td><td>5</td><td>gesture_compare.py</td></tr>
+            <tr><td><code>TRANSITION_SMOOTHING_WINDOW</code></td><td>5</td><td>gesture_compare.py</td></tr>
+            <tr><td><code>SEGMENT_COUNT</code></td><td>6</td><td>gesture_compare.py</td></tr>
+            <tr><td><code>FINGER_EXTENDED_ANGLE_DEG</code></td><td>150.0</td><td>gesture_compare.py</td></tr>
+            <tr><td><code>MIN_THRESHOLD</code> (DTW floor)</td><td>2.0</td><td>gesture_compare.py</td></tr>
+        </table>
+
+        <h3>File Map</h3>
+        <table>
+            <tr><th>File</th><th>Purpose</th></tr>
+            <tr><td><code>gesture_auth.py</code></td><td>Authentication entry point</td></tr>
+            <tr><td><code>gesture_capture.py</code></td><td>Registration entry point</td></tr>
+            <tr><td><code>gesture_compare.py</code></td><td>Core: DTW + all 4 security gates + threshold logic</td></tr>
+            <tr><td><code>utils/normalize.py</code></td><td>Spatial + temporal normalization</td></tr>
+            <tr><td><code>utils/landmarks.py</code></td><td>MediaPipe → NumPy conversion</td></tr>
+            <tr><td><code>templates/&lt;user&gt;/gesture_N.npy</code></td><td>Stored templates (60, 21, 3)</td></tr>
+            <tr><td><code>templates/&lt;user&gt;/config.json</code></td><td>Per-user thresholds &amp; metadata</td></tr>
+        </table>
+
+    </main>
+</div>
+
+</body>
+</html>
