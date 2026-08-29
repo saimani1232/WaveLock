@@ -99,6 +99,30 @@ MIN_SEGMENT_THRESHOLD = 0.12
 MAX_SEGMENT_THRESHOLD = 0.50
 SEGMENT_MARGIN = 0.10
 
+# Robust statistics — Median Absolute Deviation (MAD) replaces volatile
+# mean/std on small sample sizes. The constant 1.4826 converts MAD to a
+# consistent estimator of the standard deviation for normal distributions.
+MAD_CONSISTENCY_CONSTANT = 1.4826
+ROBUST_STD_FACTOR = 2.5
+THRESHOLD_METHOD_ROBUST = "robust_statistical_v3"
+
+# Interactive quality gate during registration — rejects outlier samples
+# that deviate too far from the growing cluster of accepted recordings.
+OUTLIER_REJECTION_FACTOR = 1.4
+
+# Cohort-based calibration — minimum DTW distance between user gesture
+# and cohort gestures below which a "too simple" warning is issued.
+MIN_IMPOSTOR_DISTANCE_RATIO = 1.5   # user-to-cohort must be > 1.5 × intra-user max
+
+# Score fusion — weighted combination of numeric gate scores.
+# Gate 3 (transition order) remains a hard boolean gate.
+FUSION_WEIGHTS = (0.45, 0.30, 0.25)       # DTW, Finger, Segment
+FUSION_ACCEPTANCE_THRESHOLD = 0.55         # Minimum fused score to grant access
+
+# Adaptive template aging — only replace templates when the live
+# gesture matches with very high confidence (well within threshold).
+AGING_CONFIDENCE_RATIO = 0.70              # DTW must be <= 70% of threshold
+
 
 # ============================================================================
 # CORE DTW FUNCTIONS
@@ -237,12 +261,15 @@ def compute_threshold_details(pairwise_distances):
     """
     Compute a robust per-user threshold and diagnostic metadata.
 
-    The old project used max(pairwise_distances) * 1.5. That works, but
-    it can become too permissive when one registration sample is noisy.
-    This statistical method combines:
-        - mean + standard deviation for normal user variation
-        - percentile + margin for robust tolerance
-        - max + smaller margin as a hard cap
+    Uses Median Absolute Deviation (MAD) instead of volatile mean/std
+    for threshold estimation on small sample sizes (n=10).  MAD is
+    resistant to outliers — a single anomalous distance cannot skew the
+    threshold the way it does with standard deviation.
+
+    The threshold is computed as:
+        robust_threshold = median + ROBUST_STD_FACTOR * (1.4826 * MAD)
+
+    Then capped by max_margin and floored by MIN_THRESHOLD.
 
     Args:
         pairwise_distances: list of genuine intra-user DTW distances.
@@ -257,9 +284,12 @@ def compute_threshold_details(pairwise_distances):
             "mean_distance": 0.0,
             "std_distance": 0.0,
             "median_distance": 0.0,
+            "mad_distance": 0.0,
+            "robust_std": 0.0,
             "percentile_distance": 0.0,
             "max_pairwise_distance": 0.0,
             "statistical_threshold": DEFAULT_THRESHOLD,
+            "robust_threshold": DEFAULT_THRESHOLD,
             "percentile_threshold": DEFAULT_THRESHOLD,
             "max_margin_threshold": DEFAULT_THRESHOLD,
             "legacy_threshold": DEFAULT_THRESHOLD,
@@ -276,6 +306,12 @@ def compute_threshold_details(pairwise_distances):
     )
     max_distance = float(np.max(distances))
 
+    # ── Robust statistics (MAD-based) ─────────────────────────────
+    mad_distance = float(np.median(np.abs(distances - median_distance)))
+    robust_std = MAD_CONSISTENCY_CONSTANT * mad_distance
+    robust_threshold = median_distance + (ROBUST_STD_FACTOR * robust_std)
+
+    # ── Legacy statistics (kept for backward-compat metadata) ─────
     statistical_threshold = mean_distance + (
         THRESHOLD_STD_FACTOR * std_distance
     )
@@ -283,32 +319,36 @@ def compute_threshold_details(pairwise_distances):
     max_margin_threshold = max_distance * THRESHOLD_MAX_MARGIN
     legacy_threshold = max_distance * THRESHOLD_MULTIPLIER
 
-    # Use the stricter of the statistically reasonable candidates. This
-    # keeps genuine variation covered while reducing outlier-driven looseness.
+    # Primary candidate: the robust (MAD-based) threshold, but at least
+    # as high as the percentile-based estimate so genuine variation is
+    # always covered.  Then cap with max_margin to prevent runaway.
     candidate_threshold = min(
-        max(statistical_threshold, percentile_threshold),
+        max(robust_threshold, percentile_threshold),
         max_margin_threshold,
         legacy_threshold,
     )
     threshold = max(MIN_THRESHOLD, candidate_threshold)
 
-    if mean_distance > 1e-6:
+    if median_distance > 1e-6:
         consistency_score = max(
             0.0,
-            100.0 * (1.0 - (std_distance / mean_distance))
+            100.0 * (1.0 - (robust_std / median_distance))
         )
     else:
         consistency_score = 100.0
 
     return {
         "threshold": float(threshold),
-        "method": THRESHOLD_METHOD,
+        "method": THRESHOLD_METHOD_ROBUST,
         "mean_distance": mean_distance,
         "std_distance": std_distance,
         "median_distance": median_distance,
+        "mad_distance": float(mad_distance),
+        "robust_std": float(robust_std),
         "percentile_distance": percentile_distance,
         "max_pairwise_distance": max_distance,
         "statistical_threshold": float(statistical_threshold),
+        "robust_threshold": float(robust_threshold),
         "percentile_threshold": float(percentile_threshold),
         "max_margin_threshold": float(max_margin_threshold),
         "legacy_threshold": float(max(MIN_THRESHOLD, legacy_threshold)),
@@ -892,23 +932,26 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
                               transition_threshold=None,
                               segment_threshold=None):
     """
-    Authenticate a live gesture against stored templates.
+    Authenticate a live gesture against stored templates using Score Fusion.
 
-    Compares the live gesture against ALL stored templates and uses
-    the best template that passes ALL FOUR security gates:
-        1. DTW movement distance <= threshold
-        2. Finger-state average mismatch <= finger_state_threshold
-        3. Finger transition order dissimilarity <= transition_threshold
-        4. Segment max finger mismatch <= segment_threshold
+    Gate 3 (Finger Transition Order) remains a HARD boolean gate — if
+    the finger sequence is structurally wrong, access is always denied.
 
-    Gates 3 and 4 were added to catch gestures where the overall motion
-    looks similar but the ORDER of finger raises is wrong (e.g., doing
-    "1-2-3" instead of "1-2-4-3").
+    Gates 1 (DTW), 2 (Finger Avg), and 4 (Segment Max) contribute to a
+    weighted Fused Confidence Score:
+
+        S = w1*(1 - DTW/θ_DTW) + w2*(1 - Mismatch_avg) + w3*(1 - Mismatch_seg)
+
+    Access is granted when:  Gate 3 passes AND S >= FUSION_ACCEPTANCE_THRESHOLD.
+
+    This prevents edge-case false rejections caused by minor sensor noise
+    (e.g., segment max = 0.39 vs limit 0.38) while strictly upholding
+    security against structural spoof attacks.
 
     Args:
         live_gesture: numpy array of shape (N, 21, 3).
         stored_templates: list of numpy arrays (one per registration sample).
-        threshold: float, maximum DTW distance to accept.
+        threshold: float, maximum DTW distance for score normalization.
         finger_state_threshold: float, maximum finger-state mismatch rate.
         transition_threshold: float, maximum transition edit distance.
         segment_threshold: float, maximum per-segment finger mismatch.
@@ -918,7 +961,7 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             - bool: True if access granted, False if denied.
             - float: The minimum DTW distance found (best match).
             - int: Index of the best-matching template.
-            - dict: Diagnostic details about all security gates.
+            - dict: Diagnostic details about all security gates and fusion.
     """
     if finger_state_threshold is None:
         finger_state_threshold = DEFAULT_FINGER_STATE_THRESHOLD
@@ -927,6 +970,7 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
     if segment_threshold is None:
         segment_threshold = DEFAULT_SEGMENT_THRESHOLD
 
+    w_dtw, w_finger, w_segment = FUSION_WEIGHTS
     comparisons = []
 
     for i, template in enumerate(stored_templates):
@@ -941,6 +985,20 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             live_gesture, template
         )
 
+        # Hard gate: transition order (structural integrity)
+        passes_transition = transition_dissim <= transition_threshold
+
+        # Individual component scores for fusion (clamped to [0, 1])
+        score_dtw = max(0.0, 1.0 - distance / threshold) if threshold > 0 else 0.0
+        score_finger = max(0.0, 1.0 - finger_mismatch)
+        score_segment = max(0.0, 1.0 - segment_max)
+
+        fused_score = (
+            w_dtw * score_dtw
+            + w_finger * score_finger
+            + w_segment * score_segment
+        )
+
         comparisons.append({
             "sample_index": i,
             "distance": distance,
@@ -951,32 +1009,35 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             "passes_finger_state": (
                 finger_mismatch <= finger_state_threshold
             ),
-            "passes_transition": (
-                transition_dissim <= transition_threshold
-            ),
+            "passes_transition": passes_transition,
             "passes_segment": (
                 segment_max <= segment_threshold
             ),
+            "score_dtw": score_dtw,
+            "score_finger": score_finger,
+            "score_segment": score_segment,
+            "fused_score": fused_score,
         })
 
-    # A template passes only if ALL FOUR gates are satisfied.
+    # ── Decision logic with score fusion ──────────────────────────
+    # A template passes when:
+    #   1) Gate 3 (transition order) is satisfied (hard gate), AND
+    #   2) The fused confidence score meets the acceptance threshold.
     passing = [
         item for item in comparisons
-        if (item["passes_distance"]
-            and item["passes_finger_state"]
-            and item["passes_transition"]
-            and item["passes_segment"])
+        if (item["passes_transition"]
+            and item["fused_score"] >= FUSION_ACCEPTANCE_THRESHOLD)
     ]
 
     if passing:
-        best = min(passing, key=lambda item: item["distance"])
+        best = max(passing, key=lambda item: item["fused_score"])
         granted = True
         failure_reason = None
     else:
         best = min(comparisons, key=lambda item: item["distance"])
         granted = False
 
-        # Build failure reason listing every gate that failed.
+        # Build failure reason listing every failing condition.
         failed_gates = []
         if not best["passes_distance"]:
             failed_gates.append("distance")
@@ -986,6 +1047,8 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             failed_gates.append("transition_order")
         if not best["passes_segment"]:
             failed_gates.append("segment_mismatch")
+        if best["fused_score"] < FUSION_ACCEPTANCE_THRESHOLD:
+            failed_gates.append("low_confidence")
         failure_reason = "_and_".join(failed_gates) if failed_gates else "unknown"
 
     details = {
@@ -1001,6 +1064,12 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
         "passes_finger_state": best["passes_finger_state"],
         "passes_transition": best["passes_transition"],
         "passes_segment": best["passes_segment"],
+        "score_dtw": best["score_dtw"],
+        "score_finger": best["score_finger"],
+        "score_segment": best["score_segment"],
+        "fused_score": best["fused_score"],
+        "fusion_weights": FUSION_WEIGHTS,
+        "fusion_acceptance_threshold": FUSION_ACCEPTANCE_THRESHOLD,
         "failure_reason": failure_reason,
         "comparisons": comparisons,
     }
@@ -1146,10 +1215,20 @@ def save_registration(username, samples, threshold, pairwise_distances,
             threshold_details["max_margin_threshold"], 4
         ),
         "legacy_threshold": round(threshold_details["legacy_threshold"], 4),
+        "mad_pairwise_distance": round(
+            threshold_details["mad_distance"], 4
+        ),
+        "robust_std": round(
+            threshold_details["robust_std"], 4
+        ),
+        "robust_threshold": round(
+            threshold_details["robust_threshold"], 4
+        ),
         "consistency_score": round(
             threshold_details["consistency_score"], 2
         ),
         "threshold_std_factor": THRESHOLD_STD_FACTOR,
+        "robust_std_factor": ROBUST_STD_FACTOR,
         "threshold_percentile": THRESHOLD_PERCENTILE,
         "threshold_safety_margin": THRESHOLD_SAFETY_MARGIN,
         "threshold_max_margin": THRESHOLD_MAX_MARGIN,
@@ -1192,6 +1271,122 @@ def save_registration(username, samples, threshold, pairwise_distances,
         json.dump(config, f, indent=2)
 
     return user_dir
+
+
+# ============================================================================
+# ADAPTIVE TEMPLATE AGING
+# ============================================================================
+
+def update_templates_if_high_confidence(
+    username, live_gesture, best_distance, threshold,
+    stored_templates, templates_dir=TEMPLATES_DIR
+):
+    """
+    Replace the most distant stored template when the live gesture matches
+    with very high confidence, solving temporal drift in biomechanics.
+
+    Only triggers when best_distance <= AGING_CONFIDENCE_RATIO * threshold,
+    meaning the live gesture is well within the genuine acceptance zone.
+    Replaces the single template that is most distant from the current
+    cluster (the weakest/oldest/noisiest template).
+
+    Args:
+        username: str, the user's identifier.
+        live_gesture: numpy array of shape (60, 21, 3), the normalized live gesture.
+        best_distance: float, DTW distance of the best-matching template.
+        threshold: float, the current DTW threshold.
+        stored_templates: list of numpy arrays, the current templates.
+        templates_dir: str, path to templates root directory.
+
+    Returns:
+        dict or None: If a template was replaced, returns a dict with update
+        details. Returns None if no update was performed.
+    """
+    # Only update on high-confidence matches
+    if best_distance > AGING_CONFIDENCE_RATIO * threshold:
+        return None
+
+    if len(stored_templates) < 2:
+        return None
+
+    # Find the template most distant from the cluster center
+    # (average distance to all other templates)
+    avg_distances = []
+    for i, tmpl in enumerate(stored_templates):
+        total = 0.0
+        for j, other in enumerate(stored_templates):
+            if i != j:
+                total += compute_dtw_distance(tmpl, other)
+        avg_distances.append(total / (len(stored_templates) - 1))
+
+    worst_idx = int(np.argmax(avg_distances))
+
+    # Check that the live gesture would actually be a better fit
+    live_avg = 0.0
+    for j, other in enumerate(stored_templates):
+        if j != worst_idx:
+            live_avg += compute_dtw_distance(live_gesture, other)
+    live_avg /= (len(stored_templates) - 1)
+
+    if live_avg >= avg_distances[worst_idx]:
+        # The live gesture is actually worse than the current worst — skip
+        return None
+
+    # Replace the worst template
+    user_dir = os.path.join(templates_dir, username)
+    old_path = os.path.join(user_dir, f"gesture_{worst_idx + 1}.npy")
+    np.save(old_path, live_gesture)
+
+    # Reload all templates with the replacement
+    updated_templates = list(stored_templates)
+    updated_templates[worst_idx] = live_gesture
+
+    # Recompute all thresholds
+    pairwise_distances = compute_pairwise_distances(updated_templates)
+    threshold_details = compute_threshold_details(pairwise_distances)
+    finger_state_details = compute_finger_state_threshold_details(
+        updated_templates
+    )
+    transition_details = compute_transition_threshold_details(
+        updated_templates
+    )
+    segment_details = compute_segment_threshold_details(updated_templates)
+
+    # Update config.json
+    config_path = os.path.join(user_dir, "config.json")
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+    else:
+        config = {}
+
+    config["threshold"] = round(threshold_details["threshold"], 4)
+    config["finger_state_threshold"] = round(
+        finger_state_details["threshold"], 4
+    )
+    config["transition_threshold"] = round(
+        transition_details["threshold"], 4
+    )
+    config["segment_threshold"] = round(
+        segment_details["threshold"], 4
+    )
+    config["pairwise_distances"] = [round(d, 4) for d in pairwise_distances]
+    config["consistency_score"] = round(
+        threshold_details["consistency_score"], 2
+    )
+    config["threshold_method"] = threshold_details["method"]
+    config["last_template_update"] = worst_idx + 1
+
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+
+    return {
+        "replaced_template": worst_idx + 1,
+        "old_avg_distance": avg_distances[worst_idx],
+        "new_avg_distance": live_avg,
+        "new_threshold": threshold_details["threshold"],
+        "new_consistency": threshold_details["consistency_score"],
+    }
 
 
 # ============================================================================

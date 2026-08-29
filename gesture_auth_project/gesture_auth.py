@@ -33,6 +33,7 @@ from gesture_compare import (
     load_user_transition_threshold,
     load_user_segment_threshold,
     authenticate_with_details,
+    update_templates_if_high_confidence,
     list_registered_users,
 )
 from gesture_capture import (
@@ -72,10 +73,12 @@ def draw_auth_instructions(frame):
 def draw_result_overlay(frame, granted, distance, threshold,
                         finger_mismatch=None, finger_threshold=None,
                         transition_dissim=None, transition_threshold=None,
-                        segment_max=None, segment_threshold_val=None):
+                        segment_max=None, segment_threshold_val=None,
+                        fused_score=None):
     """
     Draw the authentication result as a large overlay on the frame.
     ACCESS GRANTED = green overlay, ACCESS DENIED = red overlay.
+    Now includes the Fused Confidence Score.
     """
     h, w = frame.shape[:2]
 
@@ -95,7 +98,7 @@ def draw_result_overlay(frame, granted, distance, threshold,
         main_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3
     )[0]
     text_x = (w - text_size[0]) // 2
-    text_y = (h // 2) - 50
+    text_y = (h // 2) - 70
 
     # Shadow + text
     cv2.putText(
@@ -107,6 +110,25 @@ def draw_result_overlay(frame, granted, distance, threshold,
         cv2.FONT_HERSHEY_SIMPLEX, 1.5, main_color, 3, cv2.LINE_AA
     )
 
+    # Confidence score line
+    if fused_score is not None:
+        conf_pct = fused_score * 100
+        if conf_pct >= 75:
+            conf_color = (0, 255, 0)       # green
+        elif conf_pct >= 55:
+            conf_color = (0, 200, 255)     # yellow-orange
+        else:
+            conf_color = (0, 0, 255)       # red
+        conf_text = f"Confidence: {conf_pct:.0f}%"
+        conf_size = cv2.getTextSize(
+            conf_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
+        )[0]
+        conf_x = (w - conf_size[0]) // 2
+        cv2.putText(
+            frame, conf_text, (conf_x, text_y + 40),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, conf_color, 2, cv2.LINE_AA
+        )
+
     # Line 1: DTW distance and finger-state info
     info_text = f"DTW: {distance:.2f}/{threshold:.2f}"
     if finger_mismatch is not None and finger_threshold is not None:
@@ -117,7 +139,7 @@ def draw_result_overlay(frame, granted, distance, threshold,
     )[0]
     info_x = (w - info_size[0]) // 2
     cv2.putText(
-        frame, info_text, (info_x, text_y + 45),
+        frame, info_text, (info_x, text_y + 70),
         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA
     )
 
@@ -132,7 +154,7 @@ def draw_result_overlay(frame, granted, distance, threshold,
         )[0]
         line2_x = (w - line2_size[0]) // 2
         cv2.putText(
-            frame, line2, (line2_x, text_y + 70),
+            frame, line2, (line2_x, text_y + 95),
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA
         )
 
@@ -143,7 +165,7 @@ def draw_result_overlay(frame, granted, distance, threshold,
     )[0]
     retry_x = (w - retry_size[0]) // 2
     cv2.putText(
-        frame, retry_text, (retry_x, text_y + 110),
+        frame, retry_text, (retry_x, text_y + 135),
         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1, cv2.LINE_AA
     )
 
@@ -248,6 +270,7 @@ def main():
     result_finger_mismatch = 0.0
     result_transition_dissim = 0.0
     result_segment_max = 0.0
+    result_fused_score = 0.0
     result_frame = None
 
     # ─── Main Loop ────────────────────────────────────────────────────
@@ -268,7 +291,8 @@ def main():
                     result_distance, threshold,
                     result_finger_mismatch, finger_state_threshold,
                     result_transition_dissim, transition_threshold,
-                    result_segment_max, segment_threshold
+                    result_segment_max, segment_threshold,
+                    result_fused_score
                 )
                 cv2.imshow(WINDOW_NAME, display)
 
@@ -352,6 +376,8 @@ def main():
                             auth_details["transition_dissimilarity"]
                         result_segment_max = \
                             auth_details["segment_max_mismatch"]
+                        result_fused_score = \
+                            auth_details["fused_score"]
 
                         # Terminal output
                         if result_granted:
@@ -365,6 +391,9 @@ def main():
                             print("     ACCESS DENIED")
                             print("  =============================")
 
+                        conf_pct = result_fused_score * 100
+                        print(f"  Confidence:      "
+                              f"{conf_pct:.1f}%")
                         print(f"  DTW Distance:    {result_distance:.4f}"
                               f"  (best match: sample {best_idx + 1})")
                         print(f"  Threshold:       {threshold:.4f}")
@@ -384,6 +413,41 @@ def main():
                             print(f"  Reject reason:   "
                                   f"{auth_details['failure_reason']}")
                         print(f"  Frames captured: {len(recorded_frames)}")
+
+                        # ── Adaptive Template Aging ────────────
+                        if result_granted:
+                            aging_result = \
+                                update_templates_if_high_confidence(
+                                    username, normalized,
+                                    result_distance, threshold,
+                                    stored_templates,
+                                )
+                            if aging_result:
+                                print(
+                                    f"  [ADAPT] Template "
+                                    f"{aging_result['replaced_template']}"
+                                    f" updated (high-confidence"
+                                    f" match)."
+                                )
+                                # Reload templates and thresholds
+                                stored_templates = \
+                                    load_all_user_templates(username)
+                                threshold = load_user_threshold(
+                                    username
+                                )
+                                finger_state_threshold = \
+                                    load_user_finger_state_threshold(
+                                        username
+                                    )
+                                transition_threshold = \
+                                    load_user_transition_threshold(
+                                        username
+                                    )
+                                segment_threshold = \
+                                    load_user_segment_threshold(
+                                        username
+                                    )
+
                         print()
                         print("  Press [T] to try again, [Q] to quit.")
 

@@ -33,6 +33,7 @@ import mediapipe as mp
 from utils.landmarks import extract_landmarks, is_hand_detected
 from utils.normalize import normalize_gesture
 from gesture_compare import (
+    compute_dtw_distance,
     compute_finger_state_threshold_details,
     compute_transition_threshold_details,
     compute_segment_threshold_details,
@@ -41,6 +42,11 @@ from gesture_compare import (
     save_registration,
     list_registered_users,
     NUM_REGISTRATION_SAMPLES,
+    OUTLIER_REJECTION_FACTOR,
+)
+from cohort_library import (
+    generate_cohort_library,
+    validate_gesture_uniqueness,
 )
 
 
@@ -349,6 +355,69 @@ def record_one_sample(cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
 
 
 # ============================================================================
+# QUALITY GATE — OUTLIER DETECTION
+# ============================================================================
+
+def validate_sample_quality(new_sample, accepted_samples):
+    """
+    Check whether a newly recorded sample is consistent with the
+    previously accepted samples, rejecting outliers caused by
+    accidental movement, camera drops, or user hesitation.
+
+    The quality gate only activates after 2+ samples have been accepted,
+    since we need enough data to establish a reference cluster.
+
+    Args:
+        new_sample: numpy array of shape (60, 21, 3).
+        accepted_samples: list of already-accepted numpy arrays.
+
+    Returns:
+        tuple of (bool, str):
+            - bool: True if the sample is acceptable, False if outlier.
+            - str: Diagnostic message explaining the decision.
+    """
+    # First two samples are always accepted
+    if len(accepted_samples) < 2:
+        return True, "Accepted (insufficient reference data for quality check)."
+
+    # Compute distances from the new sample to each accepted sample
+    distances_to_cluster = []
+    for accepted in accepted_samples:
+        d = compute_dtw_distance(new_sample, accepted)
+        distances_to_cluster.append(d)
+
+    avg_distance = float(np.mean(distances_to_cluster))
+
+    # Compute the median inter-sample distance among accepted samples
+    inter_distances = []
+    for i in range(len(accepted_samples)):
+        for j in range(i + 1, len(accepted_samples)):
+            d = compute_dtw_distance(accepted_samples[i], accepted_samples[j])
+            inter_distances.append(d)
+
+    median_inter = float(np.median(inter_distances))
+
+    # Reject if the new sample's average distance exceeds the threshold
+    reject_limit = OUTLIER_REJECTION_FACTOR * median_inter
+
+    if median_inter < 1e-6:
+        # If all accepted samples are nearly identical, use a generous limit
+        return True, "Accepted (reference samples are very consistent)."
+
+    if avg_distance > reject_limit:
+        return False, (
+            f"Rejected: avg distance {avg_distance:.3f} exceeds "
+            f"{OUTLIER_REJECTION_FACTOR}x median ({median_inter:.3f}) "
+            f"= {reject_limit:.3f}. Irregular motion detected."
+        )
+
+    return True, (
+        f"Accepted: avg distance {avg_distance:.3f} within "
+        f"limit {reject_limit:.3f}."
+    )
+
+
+# ============================================================================
 # MAIN APPLICATION
 # ============================================================================
 
@@ -395,30 +464,57 @@ def main():
     cap = setup_camera()
     print()
 
-    # ─── Record multiple samples ──────────────────────────────────────
+    # ─── Record multiple samples (with quality gate) ─────────────────
     samples = []
+    max_retries_per_sample = 3  # prevent infinite re-record loops
 
     try:
-        for sample_num in range(1, NUM_REGISTRATION_SAMPLES + 1):
-            print(f"  --- Sample {sample_num}/{NUM_REGISTRATION_SAMPLES} "
-                  f"--- Press [R] when ready ---")
+        sample_num = 1
+        while sample_num <= NUM_REGISTRATION_SAMPLES:
+            retries = 0
+            accepted = False
 
-            sample = record_one_sample(
-                cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
-                sample_num, NUM_REGISTRATION_SAMPLES, username
-            )
+            while not accepted:
+                print(f"  --- Sample {sample_num}/{NUM_REGISTRATION_SAMPLES} "
+                      f"--- Press [R] when ready ---")
 
-            if sample is None:
-                print("  Registration cancelled.")
-                return
+                sample = record_one_sample(
+                    cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
+                    sample_num, NUM_REGISTRATION_SAMPLES, username
+                )
 
-            samples.append(sample)
+                if sample is None:
+                    print("  Registration cancelled.")
+                    return
+
+                # ── Quality Gate: check for outliers ──────────
+                is_ok, quality_msg = validate_sample_quality(
+                    sample, samples
+                )
+
+                if is_ok:
+                    samples.append(sample)
+                    accepted = True
+                    print(f"        ✓ Sample {sample_num} {quality_msg}")
+                else:
+                    retries += 1
+                    print(f"        ✗ Sample {sample_num} had irregular "
+                          f"motion. Let's re-record that one.")
+                    print(f"          ({quality_msg})")
+                    if retries >= max_retries_per_sample:
+                        # Accept after max retries to avoid blocking
+                        samples.append(sample)
+                        accepted = True
+                        print(f"        ⚠ Accepted after {retries} "
+                              f"retries (max retries reached).")
 
             # Brief pause message between samples (not on the last one)
             if sample_num < NUM_REGISTRATION_SAMPLES:
                 print(f"        Ready for sample "
                       f"{sample_num + 1}/{NUM_REGISTRATION_SAMPLES}.")
                 print()
+
+            sample_num += 1
 
     except KeyboardInterrupt:
         print("\n  Interrupted.")
@@ -458,6 +554,28 @@ def main():
           f"{transition_details['threshold']:.4f}")
     print(f"  Segment mismatch limit:  "
           f"{segment_details['threshold']:.4f}")
+
+    # ─── Cohort-based uniqueness check ────────────────────────────────
+    print()
+    print("  Checking gesture uniqueness against common patterns...")
+    cohort = generate_cohort_library()
+    uniqueness = validate_gesture_uniqueness(
+        samples, cohort,
+        intra_user_max=max(pairwise_distances),
+        compute_dtw_fn=compute_dtw_distance,
+    )
+
+    if uniqueness["is_unique"]:
+        print(f"  ✓ Gesture is unique! (impostor ratio: "
+              f"{uniqueness['ratio']:.2f}x)")
+    else:
+        print()
+        print(f"  ⚠ WARNING: {uniqueness['warning']}")
+        print(f"    Impostor ratio: {uniqueness['ratio']:.2f}x "
+              f"(minimum: 1.50x)")
+        print(f"    Closest cohort distance: "
+              f"{uniqueness['min_impostor_distance']:.4f}")
+        print()
 
     # ─── Save registration ────────────────────────────────────────────
     user_dir = save_registration(
