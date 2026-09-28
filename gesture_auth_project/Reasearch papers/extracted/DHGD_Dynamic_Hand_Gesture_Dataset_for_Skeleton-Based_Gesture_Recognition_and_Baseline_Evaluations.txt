@@ -1,0 +1,306 @@
+DHGD: Dynamic Hand Gesture Dataset 
+for Skeleton-Based Gesture Recognition and 
+Baseline Evaluations 
+Masaya Okano 
+Graduate School of Information Science 
+and Engineering. Ritsumeikan University 
+Shiga, Japan 
+is0452xf@ed.ritsumei.ac.jp 
+ 
+ 
+ 
+Jia-Qing Liu 
+College School of Information Science 
+and Engineering. Ritsumeikan University 
+Shiga, Japan 
+liu-j@fc.ritsumei.ac.jp  
+ 
+Tomoko Tateyama           
+Department of Intelligent Information 
+Engineering 
+Research Promotion Unit, School of 
+Medical Sciences 
+Fujita Health University 
+tomoko.tateyama@fujita-hu.ac.jp
+*Yen-Wei Chen 
+Graduate School of Information Science and Engineering. Ritsumeikan University 
+Shiga, Japan 
+chen@is.ritsumei.ac.jp 
+*Correspondinng Author: Yen-Wei Chen (chen@is.ritsumei.ac.jp) 
+Abstract: In this paper, we introduce the Dynamic Hand Gesture 
+Dataset (DHGD) tailored for skeleton-based gesture recognition. 
+This novel dataset encompasses nine distinct hand gestures, 
+each performed by twenty participants, designed to facilitate 
+intuitive manipulation of images, including actions such as 
+rotations and scaling. Each gesture sequence ia captured over 
+70 frames using an RGB-D camera system. Key points of the 
+hand are detected in each frame utilizing MediaPipe Hands, 
+with key point represented by its three-dimensional coordinates. 
+Additionally, we evaluate the recognition accuracy of the nine 
+distinct dynamic hand gestures using Spatial-Temporal Graph 
+Convolutional Network (ST-GCN). This network is selected as 
+a benchmark for graph convolutional networks to validate the 
+dataset’s efficacy.  
+ 
+Ⅰ. INTRODUCTION 
+Hand gesture recognition has emerged as a pivotal touchless 
+user interface, gaining widespread adoption in gaming, 
+entertainment, and medical applications, as evidenced by our 
+touchless visualization system [1]. Recent advancements have 
+leveraged multimodal data, such as color and depth images [2-
+7], bolstering the precision of gesture recognition system. 
+While static gesture recognition has attained commendable 
+accuracy, it fails to capture the subtle dynamics of human 
+interactions, consequently restricting its utility in real-time 
+and dynamic contexts. To address this deficiency, dynamic 
+gesture recognition has become imperative, offering a more 
+authentic and intuitive user experience by incorporating 
+temporal dynamics and the fluidity of natural motion 
+overlooked by static models. In this paper, we have developed 
+DHGD, a novel dataset for dynamic hand gesture recognition 
+utilizing skeleton-based approaches and deep learning. The 
+primary benefits of this dataset are outlined as follows: 
+ 
+A diverse collection of nine distinct hand gestures, 
+demonstrated by a group of thirty participants, resulting 
+in a rich and diversified dataset 
+ 
+The dynamic hand gestures are specifically designed for 
+natural and intuitive interaction with visual interfaces. 
+ 
+A benchmark analysis employing the Spatial-Temporal 
+Graph Convolutional Network (ST-GCN) has been 
+executed on the dataset. Detailed recognition accuracies 
+for each unique gesture are provided, which assist users 
+in identifying the most effective dynamic gestures for 
+their applications. 
+  The remainder of this paper is organized as follows: Section 
+2 describes the dataset's unique attributes in detail. Section 3 
+discussed the evaluation of the dataset against benchmark 
+performance metrics. Finally, Section 4 presents our 
+concluding observation and implications of the research 
+findings. 
+ 
+Ⅱ. SKELTON GRAGH DYNAMIC HAND GESTURE 
+DATASETS 
+A. 
+Ergonomic Design of the Dataset Recording System  
+During the experimental procedure, participants were 
+positioned 0.9 meters away from the sensor, which was 
+utilized to record the gestures using a single RGB-D camera, 
+specifically the Kinect [8]. Figure 1 schematically depicts the 
+setup for hand gesture capture, with the hand images being 
+recorded against a blue sheet that served as the standardized 
+background. 
+ 
+ 
+2024 IEEE International Conference on Consumer Electronics (ICCE) | 979-8-3503-2413-6/24/$31.00 ©2024 IEEE | DOI: 10.1109/ICCE59016.2024.10444226
+rized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:18:27 UTC from IEEE Xplore.  Restrictions a
+B. 
+Hand Image Pre-processing 
+  The hand color images were synthesized from the skeleton 
+tracking and depth data provided by the Kinect system. The 
+initial step involved capturing raw color images of the 
+participant's hand, as depicted in Figure 2(a). A meticulous 
+calibration procedure was then implemented to ensure precise 
+alignment between the color and depth sensors, with a 
+particular focus on the articulation points of the right hand. 
+For targeted analysis, we demarcated a 300 × 300 pixel square 
+as the Region of Interest (ROI), as shown in Figure 2(b). This 
+defined ROI allows for a concentrated examination of the 
+gesture dynamics within a consistent frame of reference.
+  Upon completion of the data collection phase, we utilized 
+MediaPipe Hands [9] for the detection of joint points. The 
+output data includes coordinates of hand landmarks in both 
+image and world reference frames, as well as the classification 
+of hand orientation, distinguishing between left and right 
+hands. Figure 2(c) exemplifies the imagery post-application of 
+MediaPipe Hands, and Figure 2(d) exhibits the reconstructed 
+3D visualization derived from the output. 
+ 
+ 
+Fig.2. Sample data for hand image pre-processing 
+ 
+ 
+C. 
+Dataset Characteristics  
+This dataset comprises nine distinct hand gestures, each 
+captured in a sequence of 70 frames to comprise a complete 
+motion sequence. Recorded from thirty participants, every 
+individual performed each gesture five times, culminating in 
+a comprehensive dataset of 900 instances (30 participants × 9 
+gestures × 5 repetitions). The resolution for each hand gesture 
+image is standardized at 300 by 300 pixels, ensuring 
+uniformity in the visual data. Significantly, the dataset 
+includes nine intuitive hand gestures that mimic common 
+rotational and scaling action. Figures 3 (a to h) illustrate the 
+diverse range of gestures included in the dataset. Gestures (a 
+to c) are predicated on rotational dynamics, with the thumb 
+and index finger articulating around the x, y, and z axes, 
+respectively. Gesture (d) involves the elevation of the index 
+finger followed by a downward motion, mimicking a pressing 
+action. Gesture 3(e) is characterized by displaying four fingers 
+and then drawing them inward while concurrently tilting the 
+palm sideways. In Gesture 3(f), the motion starts with fingers 
+directed downwards and culminates in their upward elevation. 
+Conversely, Gesture 3(g) depicts the inverse action, where 
+fingers begin elevated and are subsequently lowered. Gestures 
+(h) and (i) represent the actions of expansion and contraction, 
+respectively, where the deliberate spreading and narrowing of 
+the thumb and index finger exemplify these concepts. 
+ 
+(a) Rotate y 
+(b)  Rotate x 
+(c) Rotate z 
+(d) Select 
+(e) Display 
+ 
+Fig.1 Illustration of the DHGD dataset acquisition setup. 
+ 
+rized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:18:27 UTC from IEEE Xplore.  Restrictions a
+(f) Up 
+(g) Down 
+(h) Zoom in 
+(i) Zoom out 
+Fig. 3 Nine dynamic hand gestures 
+ 
+Ⅲ. BENCHMARK EVALUTION 
+A. Baseline techniques and configurations  
+ 
+Fig.4. ST-GCN model for hand gesture recognition 
+ 
+Table.1. Recognition accuracy by ST-GCN for each 
+gesture 
+The Spatial-Temporal Graph Convolutional Network (ST-
+GCN) [10] is a model introduced in 2018 to detect human 
+actions using skeletal data. This model comprises multiple 
+layers of spatial and temporal graph convolutions, aimed at 
+learning spatial and temporal graphs from the input data. ST-
+GCN initiates with spatial convolution, extending the GCN 
+model into the temporal domain. Subsequently, convolution 
+occurs across frames, advancing in the temporal direction 
+through iterative application. 
+By employing convolution in both temporal and spatial 
+dimensions, ST-GCN effectively captures temporal sequence 
+information. These elements are denoted as ST-GCN Units. The 
+architecture encompasses six layers of ST-GCN units, 
+subsequently followed by a Global Average Pooling (GAP) 
+layer and a Softmax classifier. The configuration of the ST-
+GCN model employed for hand gesture recognition is 
+illustrated in Figure 4. 
+ 
+B. Evaluation Results 
+To ensure robust validation, a eight-fold cross-validation 
+approach was employed. In this scheme, data from 21 subjects 
+were designated for training, while the data from 9 subjects were 
+reserved for testing, resulting in a total of 945 training samples 
+and 405 test samples encompassing all nine classes. This 
+validation process was reiterated times, and the outcomes 
+consistently affirmed in each iteration. The average classification 
+accuracy achieved using ST-GCN is detailed in Table 1, 
+summarizing the recognition accuracy for each gesture. 
+Additionally, we experimented by randomly translating 
+coordinates for the training data at each epoch and applying data 
+augmentation (DA). While the recognition accuracy for rotation 
+and zooming in and out appears relatively lower compared to 
+other gestures, this discrepancy can be attributed to significant 
+individual variations. Nonetheless, the overall recognition 
+accuracy for the test set reached 92.41%.  
+ 
+Furthermore, applying data augmentation to the test data resulted 
+in a 1.94% improvement in accuracy, achieving a recognition 
+accuracy of 94.35%. The confusion matrix is illustrated in Figure 
+5.   
+ 
+ 
+ 
+ 
+ 
+Fig.5. ST-GCN + DA confusion matrix 
+rized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:18:27 UTC from IEEE Xplore.  Restrictions a
+Ⅳ. CONCLUSION 
+In this paper, we presented a dynamic hand gesture dataset for 
+skeleton-based gesture recognition based on Kinect sensor and 
+MediaPipe Hands. A comprehensive collection of 9 dynamic 
+hand gestures was captured from 30 participants and 
+subsequently subjected to meticulous preprocessing to extract 
+well-segmented hand region images. The ST-GCN model was 
+employed as a benchmark for this dataset, demonstrating an 
+accuracy of 94.35%. Future efforts will be dedicated to further 
+enhancing the accuracy of dynamic hand gesture recognition, 
+with the overarching objective of fully unleashing the potential 
+of the Skeleton Graph Dynamic Hand Gesture Datasets.  
+ 
+ACKCOWLEDGMENT 
+This work was partly supported by Grant-in-Aid for 
+Scientific Research (B) (21H03470) and Grant-in-Aid for 
+Scientific Research (C) (21K11936) ，Grant-in-Aid for 
+Scientific Research (Young Scientists, Activity Start-up) 
+(23K16909, 22K21316).  
+ 
+REFERENCES 
+[1] J.-Q. Liu, T. Tateyama, Y. Iwamoto, Y.-W. Chen, “A 
+Preliminary Study of Kinect-Based Real-Time Hand 
+Gesture Interaction Systems for Touchless Visualizations 
+of Hepatic Structures in Surgery,” Medical Imaging and 
+Information Sciences, Vol.36, pp. 128-135 (2019). 
+[2] J.-Q. Liu, R. Fujii, T. Tateyama, Y. Iwamoto, Y.-W. Chen: 
+“Kinect-Based 
+Gesture 
+Recognition 
+for Touchless 
+Visualization of Medical Images,” International Journal 
+on Computer Electrical Engineering, Vol.9, pp.421-429 
+(2017) 
+[3] J.-Q. Liu, K. Furusawa, S. Tsujinaga, T. Tateyama, Y. 
+Iwamoto, Y.-W. Chen, “MaHG-RGBD: A Multi-angle 
+View Hand Gesture RGB-D Dataset for Deep Learning 
+Based Gesture Recognition and Baseline Evaluations,” 
+Proc. of 37th IEEE International Conference on Consumer 
+Electronics (IEEE ICCE2019), Las Vegas, USA, Jan. 11-
+13, 2019. 
+[4] 
+K. Furusawa, 
+J. Liu, 
+S. Tsujinaga, 
+T. Tateyama, 
+Y. Iwamoto, 
+Y.-W. Chen, 
+“Robust 
+Hand 
+Gesture 
+Recognition Using Multimodal Deep Learning for 
+Touchless Visualization of 3D Medical Images,” Proc. 
+ICNC-FSKD 2019, pp.593-600, 2019.   
+[5] J. Liu, S. Tsujinaga, S. Chai, H. Sun, T. Tateyam, Y. 
+Iwamoto, X. Huang, L. Lin, Y.-W. Chen, “Single Image 
+Depth 
+Map 
+Estimation 
+for 
+Improving 
+posture 
+Recognition,” IEEE Sensors Journal, Vol.21, pp. 26997 – 
+27004, 2021  
+[6] M. Okano, K. Furusawa, et. al.: Accurate Gesture 
+Recognition Using RGB-D Images. Kansai-section Joint 
+Convention of Institutes of Electrical Engineering, p.251, 
+2021.  
+[7] M. Okano, et al.: Accurate Hand Gesture Recognition 
+Using Color and Depth Images with Modality-invariant 
+Fusion. In: 2022 IEEE 11th Global Conference on 
+Consumer Electronics (GCCE). IEEE, 2022. p. 645-648. 
+[8] Microsoft, Kinect for Xbox One 
+URL:https://www.xbox.com/en- US/xbox-
+one/accessories/kinect  
+[9] F. Zhang, et. al.:  Mediapipe hands: On-device real-time 
+hand tracking. arXiv preprint arXiv:2006.10214, 2020.  
+[10] S. Yan, Y. Xiong, and D. Lin. "Spatial temporal graph 
+convolutional 
+networks 
+for 
+skeleton-based 
+action 
+recognition." Proceedings of the AAAI conference on 
+artificial intelligence. Vol. 32. No. 1. 2018. 
+rized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:18:27 UTC from IEEE Xplore.  Restrictions a

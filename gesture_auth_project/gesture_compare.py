@@ -24,6 +24,24 @@ import json
 import numpy as np
 from dtaidistance import dtw_ndim
 
+from utils.anthropometrics import (
+    extract_gesture_anthropometric_signature,
+    calibrate_anthropometric_profile,
+    compare_anthropometric_signatures,
+    DEFAULT_ANTHRO_TOLERANCE,
+)
+from utils.kinematics import (
+    extract_kinematic_signature,
+    calibrate_kinematic_profile,
+    compare_kinematic_signatures,
+    DEFAULT_KINEMATIC_TOLERANCE,
+)
+from utils.face_auth import (
+    load_face_embedding,
+    verify_face,
+    SFACE_COSINE_THRESHOLD,
+)
+
 
 # ============================================================================
 # CONFIGURATION
@@ -923,6 +941,96 @@ def load_user_segment_threshold(username, templates_dir=TEMPLATES_DIR):
     return details["threshold"]
 
 
+def load_user_anthropometric_profile(username, stored_templates=None,
+                                     templates_dir=TEMPLATES_DIR):
+    """
+    Load the user's anthropometric hand geometry profile.
+
+    If present in config.json with current method 'metacarpal_invariant_v2', loads it.
+    If missing or older method, re-calibrates from stored templates and updates config.json.
+    """
+    config_path = os.path.join(templates_dir, username, "config.json")
+    config = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            profile = config.get("anthropometric_profile")
+            if profile and profile.get("method") == "metacarpal_invariant_v2":
+                return profile
+        except Exception:
+            pass
+
+    if stored_templates is None:
+        try:
+            stored_templates = load_all_user_templates(username, templates_dir)
+        except Exception:
+            stored_templates = []
+
+    if stored_templates and len(stored_templates) >= 1:
+        new_profile = calibrate_anthropometric_profile(stored_templates)
+        if os.path.exists(config_path):
+            try:
+                config["anthropometric_profile"] = new_profile
+                with open(config_path, 'w') as f:
+                    json.dump(config, f, indent=2)
+            except Exception:
+                pass
+        return new_profile
+
+    # Fallback to neutral default
+    return {
+        "baseline": [0.55, 1.02, 0.80, 0.75, 0.50],
+        "std": [0.03, 0.03, 0.03, 0.03, 0.03],
+        "tolerance": DEFAULT_ANTHRO_TOLERANCE,
+        "method": "metacarpal_invariant_v2",
+    }
+
+
+def load_user_kinematic_profile(username, stored_templates=None,
+                                templates_dir=TEMPLATES_DIR):
+    """
+    Load the user's kinematic rhythm profile.
+
+    If present in config.json, loads the cached baseline.
+    If registering prior to this upgrade, calibrates on-the-fly from
+    the user's stored templates for 100% backward compatibility.
+    """
+    config_path = os.path.join(templates_dir, username, "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            if "kinematic_profile" in config:
+                return config["kinematic_profile"]
+        except Exception:
+            pass
+
+    if stored_templates is None:
+        try:
+            stored_templates = load_all_user_templates(username, templates_dir)
+        except Exception:
+            stored_templates = []
+
+    if stored_templates and len(stored_templates) >= 1:
+        return calibrate_kinematic_profile(stored_templates)
+
+    return {
+        "baseline_binned_velocity": [0.1] * 10,
+        "baseline_jerk": 0.001,
+        "baseline_peak_phase": 0.5,
+        "tolerance": DEFAULT_KINEMATIC_TOLERANCE,
+    }
+
+
+def load_user_face_profile(username, templates_dir=TEMPLATES_DIR):
+    """
+    Load the enrolled 128-D face embedding for the user.
+    Returns numpy array of shape (128,) or None if user has not enrolled face (legacy mode).
+    """
+    return load_face_embedding(username, templates_dir)
+
+
 # ============================================================================
 # AUTHENTICATION FUNCTIONS
 # ============================================================================
@@ -930,9 +1038,15 @@ def load_user_segment_threshold(username, templates_dir=TEMPLATES_DIR):
 def authenticate_with_details(live_gesture, stored_templates, threshold,
                               finger_state_threshold=None,
                               transition_threshold=None,
-                              segment_threshold=None):
+                              segment_threshold=None,
+                              anthropometric_profile=None,
+                              kinematic_profile=None,
+                              face_match=True,
+                              face_confidence=1.0,
+                              face_details=None):
     """
-    Authenticate a live gesture against stored templates using Score Fusion.
+    Authenticate a live gesture against stored templates using Score Fusion
+    plus an Anthropometric Identity verification layer.
 
     Gate 3 (Finger Transition Order) remains a HARD boolean gate — if
     the finger sequence is structurally wrong, access is always denied.
@@ -942,11 +1056,10 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
 
         S = w1*(1 - DTW/θ_DTW) + w2*(1 - Mismatch_avg) + w3*(1 - Mismatch_seg)
 
-    Access is granted when:  Gate 3 passes AND S >= FUSION_ACCEPTANCE_THRESHOLD.
-
-    This prevents edge-case false rejections caused by minor sensor noise
-    (e.g., segment max = 0.39 vs limit 0.38) while strictly upholding
-    security against structural spoof attacks.
+    The Anthropometric Invariant Gate evaluates physical hand morphology
+    (bone ratios, palm aspect). If an observer repeats the sequence with
+    their own hand, the macro gates pass but the hand anatomy check denies
+    access with 'impostor_hand_morphology'.
 
     Args:
         live_gesture: numpy array of shape (N, 21, 3).
@@ -955,13 +1068,15 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
         finger_state_threshold: float, maximum finger-state mismatch rate.
         transition_threshold: float, maximum transition edit distance.
         segment_threshold: float, maximum per-segment finger mismatch.
+        anthropometric_profile: dict, optional calibrated hand morphology.
+        kinematic_profile: dict, optional calibrated motion dynamics.
 
     Returns:
         tuple of (bool, float, int, dict):
             - bool: True if access granted, False if denied.
             - float: The minimum DTW distance found (best match).
             - int: Index of the best-matching template.
-            - dict: Diagnostic details about all security gates and fusion.
+            - dict: Diagnostic details about all security gates, fusion, and biometrics.
     """
     if finger_state_threshold is None:
         finger_state_threshold = DEFAULT_FINGER_STATE_THRESHOLD
@@ -969,6 +1084,35 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
         transition_threshold = DEFAULT_TRANSITION_THRESHOLD
     if segment_threshold is None:
         segment_threshold = DEFAULT_SEGMENT_THRESHOLD
+
+    # ── Biometric Identity Layer (Anti-Shoulder-Surfing) ─────────
+    if anthropometric_profile is None and stored_templates:
+        anthropometric_profile = calibrate_anthropometric_profile(stored_templates)
+
+    if kinematic_profile is None and stored_templates:
+        kinematic_profile = calibrate_kinematic_profile(stored_templates)
+
+    if anthropometric_profile:
+        live_anthro_sig = extract_gesture_anthropometric_signature(live_gesture)
+        anthro_tol = anthropometric_profile.get("tolerance", DEFAULT_ANTHRO_TOLERANCE)
+        anthro_match, anthro_conf, anthro_details = compare_anthropometric_signatures(
+            live_anthro_sig,
+            anthropometric_profile["baseline"],
+            anthro_tol
+        )
+    else:
+        anthro_match, anthro_conf, anthro_details = True, 1.0, {}
+
+    if kinematic_profile:
+        live_kinematic_sig = extract_kinematic_signature(live_gesture)
+        kin_tol = kinematic_profile.get("tolerance", DEFAULT_KINEMATIC_TOLERANCE)
+        kin_match, kin_conf, kin_details = compare_kinematic_signatures(
+            live_kinematic_sig,
+            kinematic_profile,
+            kin_tol
+        )
+    else:
+        kin_match, kin_conf, kin_details = True, 1.0, {}
 
     w_dtw, w_finger, w_segment = FUSION_WEIGHTS
     comparisons = []
@@ -1019,8 +1163,8 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             "fused_score": fused_score,
         })
 
-    # ── Decision logic with score fusion ──────────────────────────
-    # A template passes when:
+    # ── Decision logic with score fusion & biometric identity ─────
+    # A template passes macro-gates when:
     #   1) Gate 3 (transition order) is satisfied (hard gate), AND
     #   2) The fused confidence score meets the acceptance threshold.
     passing = [
@@ -1029,10 +1173,43 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             and item["fused_score"] >= FUSION_ACCEPTANCE_THRESHOLD)
     ]
 
+    # Combined Biometric Identity Verification:
+    passes_biometric = anthro_match and kin_match
+    biometric_fused_score = 0.60 * anthro_conf + 0.40 * kin_conf
+
+    # Multimodal Soft Consensus:
+    # When facial identity is verified with high confidence (>= 0.70 cosine)
+    # and movement kinematics pass (fluidity >= 0.65), dynamic gestures (such as
+    # in-air signatures) with borderline hand anatomy (conf >= 0.35) are admitted
+    # via fused biometric consensus (>= 0.50).
+    if not passes_biometric and kin_match and anthro_conf >= 0.35:
+        if face_match and face_confidence >= 0.70 and biometric_fused_score >= 0.50:
+            passes_biometric = True
+
+    # Multimodal Identity Consensus:
+    face_ok = True if face_match is None else bool(face_match)
+    passes_multimodal = face_ok and passes_biometric
+
     if passing:
         best = max(passing, key=lambda item: item["fused_score"])
-        granted = True
-        failure_reason = None
+
+        # Multimodal Identity Check: verify face identity, hand morphology, and kinematics
+        if passes_multimodal:
+            granted = True
+            failure_reason = None
+        else:
+            granted = False
+            bio_failures = []
+            if face_match is False:
+                f_reason = "impostor_face_identity"
+                if face_details and face_details.get("reason") == "lookalike_sibling_detected":
+                    f_reason = "lookalike_sibling_detected"
+                bio_failures.append(f_reason)
+            if not anthro_match:
+                bio_failures.append("impostor_hand_morphology")
+            if not kin_match:
+                bio_failures.append("impostor_kinematic_dynamics")
+            failure_reason = "_and_".join(bio_failures)
     else:
         best = min(comparisons, key=lambda item: item["distance"])
         granted = False
@@ -1049,7 +1226,36 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             failed_gates.append("segment_mismatch")
         if best["fused_score"] < FUSION_ACCEPTANCE_THRESHOLD:
             failed_gates.append("low_confidence")
+        if face_match is False:
+            f_reason = "impostor_face_identity"
+            if face_details and face_details.get("reason") == "lookalike_sibling_detected":
+                f_reason = "lookalike_sibling_detected"
+            failed_gates.append(f_reason)
+        if not anthro_match:
+            failed_gates.append("impostor_hand_morphology")
+        if not kin_match:
+            failed_gates.append("impostor_kinematic_dynamics")
         failure_reason = "_and_".join(failed_gates) if failed_gates else "unknown"
+
+    if face_match is None:
+        multimodal_fused_score = (
+            0.60 * best["fused_score"]
+            + 0.40 * biometric_fused_score
+        )
+    else:
+        multimodal_fused_score = (
+            0.40 * face_confidence
+            + 0.35 * best["fused_score"]
+            + 0.25 * biometric_fused_score
+        )
+
+    macro_gates_passed = sum([
+        bool(best["passes_distance"]),
+        bool(best["passes_finger_state"]),
+        bool(best["passes_transition"]),
+        bool(best["passes_segment"]),
+    ])
+    passes_macro = bool(passing) and (macro_gates_passed >= 3)
 
     details = {
         "distance": best["distance"],
@@ -1064,12 +1270,27 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
         "passes_finger_state": best["passes_finger_state"],
         "passes_transition": best["passes_transition"],
         "passes_segment": best["passes_segment"],
+        "passes_macro": passes_macro,
+        "macro_gates_passed": macro_gates_passed,
         "score_dtw": best["score_dtw"],
         "score_finger": best["score_finger"],
         "score_segment": best["score_segment"],
         "fused_score": best["fused_score"],
         "fusion_weights": FUSION_WEIGHTS,
         "fusion_acceptance_threshold": FUSION_ACCEPTANCE_THRESHOLD,
+        "anthropometric_match": anthro_match,
+        "anthropometric_confidence": anthro_conf,
+        "anthropometric_details": anthro_details,
+        "kinematic_match": kin_match,
+        "kinematic_confidence": kin_conf,
+        "kinematic_details": kin_details,
+        "face_match": face_match,
+        "face_confidence": face_confidence,
+        "face_details": face_details,
+        "passes_biometric": passes_biometric,
+        "passes_multimodal": passes_multimodal,
+        "biometric_fused_score": round(biometric_fused_score, 4),
+        "multimodal_fused_score": round(multimodal_fused_score, 4),
         "failure_reason": failure_reason,
         "comparisons": comparisons,
     }
@@ -1153,9 +1374,10 @@ def save_registration(username, samples, threshold, pairwise_distances,
     user_dir = os.path.join(templates_dir, username)
     os.makedirs(user_dir, exist_ok=True)
 
-    # Remove old files if re-registering
+    # Remove old gesture files if re-registering (preserve face_embedding.npy)
     for old_file in os.listdir(user_dir):
-        os.remove(os.path.join(user_dir, old_file))
+        if old_file != "face_embedding.npy":
+            os.remove(os.path.join(user_dir, old_file))
 
     # Save each sample
     for i, sample in enumerate(samples, start=1):
@@ -1264,6 +1486,9 @@ def save_registration(username, samples, threshold, pairwise_distances,
         ),
         "segment_margin": SEGMENT_MARGIN,
         "segment_count": SEGMENT_COUNT,
+        "anthropometric_profile": calibrate_anthropometric_profile(samples),
+        "kinematic_profile": calibrate_kinematic_profile(samples),
+        "face_enrolled": os.path.exists(os.path.join(user_dir, "face_embedding.npy")),
     }
 
     config_path = os.path.join(user_dir, "config.json")
@@ -1279,7 +1504,10 @@ def save_registration(username, samples, threshold, pairwise_distances,
 
 def update_templates_if_high_confidence(
     username, live_gesture, best_distance, threshold,
-    stored_templates, templates_dir=TEMPLATES_DIR
+    stored_templates, templates_dir=TEMPLATES_DIR,
+    anthropometric_match=True, anthropometric_confidence=1.0,
+    kinematic_match=True, kinematic_confidence=1.0,
+    face_match=True, face_confidence=1.0,
 ):
     """
     Replace the most distant stored template when the live gesture matches
@@ -1290,6 +1518,12 @@ def update_templates_if_high_confidence(
     Replaces the single template that is most distant from the current
     cluster (the weakest/oldest/noisiest template).
 
+    Multimodal Biometric Guard:
+    Template aging is strictly inhibited if the Face Verification anchor,
+    Anthropometric Invariant layer, or Kinematic layer does not confirm
+    genuine identity with high confidence (face >= 0.70, anthro >= 0.85, kinematic >= 0.65).
+    This prevents impostor template poisoning attacks.
+
     Args:
         username: str, the user's identifier.
         live_gesture: numpy array of shape (60, 21, 3), the normalized live gesture.
@@ -1297,12 +1531,27 @@ def update_templates_if_high_confidence(
         threshold: float, the current DTW threshold.
         stored_templates: list of numpy arrays, the current templates.
         templates_dir: str, path to templates root directory.
+        anthropometric_match: bool, whether hand anatomy passed.
+        anthropometric_confidence: float, confidence in hand morphology match.
+        kinematic_match: bool, whether movement rhythm passed.
+        kinematic_confidence: float, confidence in movement rhythm match.
+        face_match: bool, whether face identity verified.
+        face_confidence: float, confidence in facial identity match.
 
     Returns:
         dict or None: If a template was replaced, returns a dict with update
         details. Returns None if no update was performed.
     """
-    # Only update on high-confidence matches
+    # Safeguard 1: Impostor template poisoning guard (Multimodal Face + Hand Biometrics)
+    face_ok = True if face_match is None else (bool(face_match) and face_confidence >= 0.70)
+    if not face_ok:
+        return None
+    if not anthropometric_match or anthropometric_confidence < 0.85:
+        return None
+    if not kinematic_match or kinematic_confidence < 0.65:
+        return None
+
+    # Safeguard 2: Only update on high-confidence macro matches
     if best_distance > AGING_CONFIDENCE_RATIO * threshold:
         return None
 
@@ -1351,6 +1600,8 @@ def update_templates_if_high_confidence(
         updated_templates
     )
     segment_details = compute_segment_threshold_details(updated_templates)
+    anthro_profile = calibrate_anthropometric_profile(updated_templates)
+    kinematic_profile = calibrate_kinematic_profile(updated_templates)
 
     # Update config.json
     config_path = os.path.join(user_dir, "config.json")
@@ -1376,6 +1627,8 @@ def update_templates_if_high_confidence(
     )
     config["threshold_method"] = threshold_details["method"]
     config["last_template_update"] = worst_idx + 1
+    config["anthropometric_profile"] = anthro_profile
+    config["kinematic_profile"] = kinematic_profile
 
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)

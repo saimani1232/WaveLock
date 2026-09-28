@@ -489,45 +489,49 @@ Best match: Template 3, distance = 1.98 → Gate 1 PASSES ⚠️
 
 ---
 
-## 2.6 Why DTW Can Be Fooled (And How the Other Gates Help)
+## 2.6 Why DTW Can Be Fooled (And How the Multimodal Architecture Defends Against It)
 
-DTW measures the **global alignment cost** of two trajectories. It excels at catching:
+DTW measures the **global alignment cost** of two spatial trajectories. It excels at catching:
 - Completely different gestures (waving vs pointing)
 - Different hand motions (left-to-right vs up-and-down)
 - Random hand movements
 
-But DTW struggles with:
-- Gestures that use the same overall motion but different fingers
-- Gestures with the right fingers in the wrong order
-- Gestures that are 90% correct but wrong in a small section
+However, DTW has inherent theoretical limitations when used in isolation:
+1. **Missing or wrong fingers**: A gesture with the exact same hand motion but missing one finger changes only ~10 out of 60 frames. DTW absorbs this difference through temporal warping.
+2. **Wrong transition order**: Raising fingers in reverse order (`Middle` → `Index` instead of `Index` → `Middle`) can still trace a nearly identical 3D path.
+3. **Shoulder-Surfing Replay**: If an attacker observes your gesture and copies the motion path with their own hand, DTW will calculate a low distance and pass!
+4. **Identity Agnostic**: DTW evaluates hand movement; it does not know *who* is performing the movement.
 
-This is exactly why WaveLock uses 4 gates:
+This is why WaveLock embeds DTW as **Gate 1 of Stage 2** inside a comprehensive **4-Stage Multimodal Cascade**:
 
-| Gate | What DTW Misses | How This Gate Catches It |
-|------|----------------|--------------------------|
-| Gate 2: Finger Avg | Wrong fingers used | Checks per-frame finger extension states |
-| Gate 3: Transition Order | Right fingers, wrong order | Checks the sequence of finger raises via edit distance |
-| Gate 4: Segment Max | Localized error | Checks the worst 10-frame segment instead of averaging |
+| Security Layer | What DTW Misses | How WaveLock Neutralizes the Attack |
+| :--- | :--- | :--- |
+| **Gate 2: Finger State Avg** | Wrong fingers extended | Checks per-frame 3D inter-phalangeal joint angles ($\ge 150^\circ$). |
+| **Gate 3: Transition Order** | Right fingers, wrong sequence order | **Hard boolean gate**: Extracts chronological transitions and checks Levenshtein edit distance. |
+| **Gate 4: Segment Max** | Localized spoofing in one phase | Divides into 6 temporal segments; checks the worst 10-frame window. |
+| **Stage 1: Facial Identity Anchor** | Impostor or unauthorized person | Verifies 128-D SFace deep embeddings; blocks lookalike siblings with $\theta = 0.530$. |
+| **Stage 3: Hand Orthometrics** | Attacker copying gesture with own hand | Checks 5 scale-invariant skeletal bone length ratios (hand anatomy). |
+| **Stage 3: Neuromotor Kinematics** | Conscious, hesitant imitation | Measures dimensionless jerk ($J_{\text{dim}} \le 1.75$) and velocity envelopes. |
 
-**Together, they form a defense-in-depth strategy.** Each gate covers a blind spot of the others.
+**Together, they form a zero-trust defense-in-depth strategy.** Each layer covers the blind spots of the others.
 
 ---
 
 ## 2.7 Quick Reference: DTW in WaveLock
 
 | Aspect | Detail |
-|--------|--------|
+| :--- | :--- |
 | **Library** | `dtaidistance` (C-optimized, from KU Leuven) |
 | **Function** | `compute_dtw_distance()` in `gesture_compare.py` |
-| **Input shape** | Two arrays of (60, 21, 3), flattened to (60, 63) |
+| **Input shape** | Two arrays of `(60, 21, 3)`, flattened to `(60, 63)` |
 | **Output** | Single float — lower means more similar |
 | **Config key** | `threshold` in `config.json` |
-| **Threshold floor** | 2.0 (prevents being too strict) |
-| **Calibration method** | `statistical_v2`: max(mean+2σ, P90×1.15), capped at max×1.25 |
-| **Role in auth** | Gate 1 of 4 — ALL must pass |
-| **Speed** | < 1 ms per comparison (C-optimized) |
-| **When it fails** | Catches completely different gestures |
-| **When it can't help** | Similar trajectory but wrong fingers or wrong order |
+| **Threshold floor** | `2.0` (prevents being unreasonably strict) |
+| **Calibration method** | `robust_statistical_v3`: Median Absolute Deviation ($\text{median} + 2.5 \times 1.4826 \times \text{MAD}$) |
+| **Role in auth** | Gate 1 in Stage 2 (contributes weight $0.45$ to $S_{\text{macro}}$) |
+| **Speed** | $< 1$ ms per comparison (C-optimized) |
+| **When it fails** | Catches completely different motion paths |
+| **When it can't help** | Similar trajectory with wrong fingers, observation replays, or impostor hands |
 
 ### The Complete DTW Formula Used in WaveLock
 
@@ -543,6 +547,6 @@ $$D[0][0] = \left\| \vec{a}_0 - \vec{b}_0 \right\|_2$$
 
 $$\left\| \vec{a}_i - \vec{b}_j \right\|_2 = \sqrt{\sum_{k=0}^{62} (a_{i,k} - b_{j,k})^2}$$
 
-The authentication check is:
+The Gate 1 normalized score contribution is:
 
-$$\text{Gate 1 passes} \iff \text{DTW}(A_{\text{live}}, A_{\text{template}}) \leq \text{threshold}$$
+$$S_1 = \max\left(0, 1 - \frac{\text{DTW}(A_{\text{live}}, A_{\text{template}})}{\text{threshold}}\right)$$

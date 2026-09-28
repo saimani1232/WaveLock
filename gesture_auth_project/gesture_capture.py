@@ -48,6 +48,17 @@ from cohort_library import (
     generate_cohort_library,
     validate_gesture_uniqueness,
 )
+from utils.anthropometrics import calibrate_anthropometric_profile
+from utils.kinematics import calibrate_kinematic_profile
+from utils.face_auth import (
+    detect_primary_face,
+    extract_face_embedding,
+    save_face_embedding,
+)
+from utils.camera_utils import (
+    open_camera,
+    print_camera_diagnostics,
+)
 
 
 # ============================================================================
@@ -61,14 +72,14 @@ TARGET_FRAMES = 60            # Frames after temporal normalization
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(_SCRIPT_DIR, "templates")
 
-WINDOW_NAME = "Gesture Auth — Registration"
+WINDOW_NAME = "WaveLock - Gesture Registration"
 
 # MediaPipe Hands configuration
 DETECTION_CONFIDENCE = 0.7
 TRACKING_CONFIDENCE = 0.5
 
 # Camera settings
-CAMERA_INDEX = 0
+CAMERA_INDEX = None  # None = auto-detect working camera
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 
@@ -196,31 +207,11 @@ def setup_mediapipe():
     return hands, mp_hands, mp_drawing, mp_drawing_styles
 
 
-def setup_camera():
-    """Open the webcam and configure resolution."""
-    print(f"  Opening webcam (index {CAMERA_INDEX})...")
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-
-    if not cap.isOpened():
-        print()
-        print("  ERROR: Could not open webcam!")
-        print("  Check that your webcam is connected and not in use.")
-        sys.exit(1)
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-
-    ret, test_frame = cap.read()
-    if not ret:
-        print("  ERROR: Webcam opened but failed to read a frame.")
-        cap.release()
-        sys.exit(1)
-
-    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"  Webcam ready — resolution: {actual_w}x{actual_h}")
-
-    return cap
+def setup_camera(camera_index=None):
+    """Open the webcam with auto-detection and sensor warmup."""
+    target_index = camera_index if camera_index is not None else CAMERA_INDEX
+    # If CAMERA_INDEX is None, open_camera automatically detects the best camera
+    return open_camera(camera_index=target_index, width=CAMERA_WIDTH, height=CAMERA_HEIGHT)
 
 
 def record_one_sample(cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
@@ -417,12 +408,117 @@ def validate_sample_quality(new_sample, accepted_samples):
     )
 
 
+def capture_face_enrollment_phase(cap, username):
+    """
+    Stage 1: Enroll user's face embedding to anchor multimodal identity.
+    User looks at camera and presses [SPACE] to capture, or [S] to skip.
+    """
+    print()
+    print("  ============================================================")
+    print("    STEP 1 OF 2: Face Identity Enrollment (Anchor)")
+    print("  ============================================================")
+    print("    Look at the camera.")
+    print("    Press [SPACE] when the green face box appears to enroll face.")
+    print("    Press [S] to skip face enrollment (Gesture-only mode).")
+    print("  ============================================================")
+    print()
+
+    captured_embs = []
+    REQUIRED_FRAMES = 5
+    enrolling = False
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("  ERROR: Failed to read frame from webcam.")
+            return False
+
+        frame = cv2.flip(frame, 1)
+        h, w = frame.shape[:2]
+        display = frame.copy()
+
+        face_row, bbox = detect_primary_face(frame)
+        face_detected = face_row is not None
+
+        cv2.putText(
+            display, f"Step 1/2: Face Enrollment - {username}", (15, 35),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 100), 2, cv2.LINE_AA
+        )
+
+        if face_detected:
+            fx, fy, fw, fh = bbox
+            cv2.rectangle(display, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
+            score = face_row[-1]
+            cv2.putText(
+                display, f"Face Detected ({score:.0%})", (fx, max(20, fy - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA
+            )
+            if not enrolling:
+                cv2.putText(
+                    display, "Press [SPACE] to capture (Anti-Sibling Security) | [S] Skip",
+                    (15, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 0), 2, cv2.LINE_AA
+                )
+        else:
+            cv2.putText(
+                display, "Position your face in center of camera... | [S] Skip",
+                (15, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 150, 255), 1, cv2.LINE_AA
+            )
+
+        if enrolling:
+            if face_detected:
+                emb = extract_face_embedding(frame, face_row)
+                captured_embs.append(emb)
+                cv2.putText(
+                    display, f"Capturing face frame {len(captured_embs)}/{REQUIRED_FRAMES}...",
+                    (w // 2 - 160, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA
+                )
+
+            if len(captured_embs) >= REQUIRED_FRAMES:
+                master = np.mean(captured_embs, axis=0)
+                master /= np.linalg.norm(master)
+                save_path = save_face_embedding(username, master, TEMPLATES_DIR)
+                print(f"    ✓ Face enrolled successfully! Saved to {os.path.basename(save_path)}")
+
+                cv2.rectangle(display, (0, h // 2 - 35), (w, h // 2 + 35), (0, 180, 0), -1)
+                cv2.putText(
+                    display, "FACE ENROLLED SUCCESSFULLY!", (w // 2 - 180, h // 2 + 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA
+                )
+                cv2.imshow(WINDOW_NAME, display)
+                cv2.waitKey(1000)
+                return master
+
+        cv2.imshow(WINDOW_NAME, display)
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord('q') or key == ord('Q'):
+            print("  Registration cancelled.")
+            return False
+        elif (key == ord('s') or key == ord('S')) and not enrolling:
+            print("  [INFO] Face enrollment skipped. Proceeding to Gesture Enrollment.")
+            return None
+        elif (key == ord(' ') or key == ord('f') or key == ord('F')) and face_detected and not enrolling:
+            enrolling = True
+
+
 # ============================================================================
 # MAIN APPLICATION
 # ============================================================================
 
 def main():
     """Main gesture registration application."""
+
+    import argparse
+    parser = argparse.ArgumentParser(description="WaveLock Gesture & Multimodal Registration")
+    parser.add_argument("user", nargs="?", default=None, help="Username to register")
+    parser.add_argument("--user", "-u", dest="opt_user", type=str, default=None, help="Username to register")
+    parser.add_argument("--camera", "--cam", "-c", dest="camera", type=int, default=None, help="Camera index (default: auto-detect)")
+    parser.add_argument("--list-cams", action="store_true", help="List available cameras and exit")
+    args = parser.parse_args()
+
+    if args.list_cams:
+        print_camera_diagnostics()
+        return
 
     # ─── Banner ───────────────────────────────────────────────────────
     print()
@@ -436,7 +532,11 @@ def main():
     if existing_users:
         print(f"  Existing users: {', '.join(existing_users)}")
     print()
-    username = input("  Enter a username to register: ").strip()
+    raw_user = args.opt_user or args.user
+    if raw_user:
+        username = raw_user.strip()
+    else:
+        username = input("  Enter a username to register: ").strip()
 
     if not username:
         print("  No username entered. Exiting.")
@@ -455,13 +555,26 @@ def main():
 
     print()
     print(f"  Registering: {username}")
-    print(f"  You will record your gesture {NUM_REGISTRATION_SAMPLES} times.")
-    print(f"  Perform the SAME gesture each time for best accuracy.")
+    print(f"  Stage 1: Face Enrollment -> Stage 2: {NUM_REGISTRATION_SAMPLES} Gesture Samples")
     print()
 
     # ─── Setup ────────────────────────────────────────────────────────
     hands, mp_hands, mp_drawing, mp_drawing_styles = setup_mediapipe()
-    cap = setup_camera()
+    cap = setup_camera(camera_index=args.camera)
+    print()
+
+    # ─── Stage 1: Face Enrollment ─────────────────────────────────────
+    face_emb_result = capture_face_enrollment_phase(cap, username)
+    if face_emb_result is False:
+        cap.release()
+        cv2.destroyAllWindows()
+        return
+
+    print()
+    print("  ============================================================")
+    print("    STEP 2 OF 2: Gesture Trajectory & Kinematic Enrollment")
+    print(f"    You will record your gesture {NUM_REGISTRATION_SAMPLES} times.")
+    print("  ============================================================")
     print()
 
     # ─── Record multiple samples (with quality gate) ─────────────────
@@ -555,6 +668,14 @@ def main():
     print(f"  Segment mismatch limit:  "
           f"{segment_details['threshold']:.4f}")
 
+    # ─── Biometric Identity Profile (Anti-Shoulder-Surfing) ─────────
+    anthro_profile = calibrate_anthropometric_profile(samples)
+    kinematic_profile = calibrate_kinematic_profile(samples)
+    print(f"  Hand bone aspect ratio:  {anthro_profile['baseline'][0]:.4f} "
+          f"(tolerance: ±{anthro_profile['tolerance']:.0%})")
+    print(f"  Kinematic jerk baseline: {kinematic_profile['baseline_jerk']:.5f}")
+    print("  Biometric identity baseline calibrated (Anti-Shoulder-Surfing enabled).")
+
     # ─── Cohort-based uniqueness check ────────────────────────────────
     print()
     print("  Checking gesture uniqueness against common patterns...")
@@ -582,12 +703,19 @@ def main():
         username, samples, threshold, pairwise_distances
     )
 
+    if face_emb_result is not None and not isinstance(face_emb_result, bool):
+        face_path = save_face_embedding(username, face_emb_result, TEMPLATES_DIR)
+        face_status_str = f"ENROLLED ({os.path.basename(face_path)})"
+    else:
+        face_status_str = "SKIPPED (Legacy Mode - Face Unenrolled)"
+
     print()
     print("  " + "=" * 50)
     print(f"  REGISTRATION COMPLETE for '{username}'!")
     print("  " + "=" * 50)
     print(f"  Samples saved:  {len(samples)}")
     print(f"  Threshold:      {threshold:.4f}")
+    print(f"  Face Profile:   {face_status_str}")
     print(f"  Location:       {user_dir}")
     print()
     print("  You can now authenticate with:")

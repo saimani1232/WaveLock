@@ -1,0 +1,1032 @@
+58
+IEEE TRANSACTIONS ON CONSUMER ELECTRONICS, VOL. 67, NO. 1, FEBRUARY 2021
+A Robust Biometric Authentication System
+for Handheld Electronic Devices
+by Intelligently Combining 3D Finger
+Motions and Cerebral Responses
+Santosh K. Behera
+, Pradeep Kumar, Debi P. Dogra
+, Member, IEEE, and Partha P. Roy, Member, IEEE
+Abstract—Rapid advancement in sensor technology through
+miniaturization of electronic components has enabled the con-
+sumer electronic (CE) research community including the manu-
+facturers to embed various utility sensors into handheld devices.
+In addition to traditional sensors such as Inertial Measurement
+Unit (IMU), camera, ﬁngerprint or proximity, futuristic sen-
+sors such as Electroencephalogram (EEG) or Electromyography
+(EMG) are also being included in the next-generation CE devices.
+Air or touch signature-based authentication systems are common
+in modern CE devices. However, cerebral activities clubbed with
+gestures will certainly enhance the security of such authentication
+systems. This can help consumers from being the victims of shoul-
+der surﬁng attacks. In this article, a new method is proposed to
+verify air signatures by analyzing ﬁnger movements and cerebral
+activities together with the help of sensors in next-generation CE
+devices. Signatures are ﬁrst spotted by analyzing 3D geometrical
+features of the ﬁnger movement during the signing. Concurrent
+EEG responses are then analyzed for the veriﬁcation. Hidden
+Markov Model (HMM) and Random Forest (RF) classiﬁers have
+been used to train the system. Experiments reveal that EEG sig-
+nals are highly correlated with the ﬁnger movements during air
+signatures even in the presence of motion artifacts. Therefore,
+false-positive rates have signiﬁcantly reduced as compared to the
+existing tracking-based methods. Veriﬁcation accuracy as high as
+95.5% (HMM) and 98.5% (RF) have been recorded when tested
+on our dataset.
+Index Terms—Biometric authentication, air signature, signa-
+ture spotting, signature veriﬁcation.
+I. INTRODUCTION
+A
+DVANCEMENT in sensor technology has enabled
+researchers to develop robust biometric systems capable
+of capturing air gestures for authentication and veriﬁcation
+purposes [1] that can even be used in handheld devices.
+Moreover, the inclusion of miniaturized sensors in these
+devices has brought a revolution in the next-generation of
+consumer electronics (CE) products. Futuristic CE devices
+Manuscript received August 29, 2020; revised November 25, 2020
+and January 13, 2021; accepted January 24, 2021. Date of publication
+January 28, 2021; date of current version February 26, 2021. (Corresponding
+author: Santosh K. Behera.)
+Santosh K. Behera and Debi P. Dogra are with the School of Electrical
+Sciences, Indian Institute of Technology Bhubaneswar, Bhubaneswar 752050,
+India (e-mail: sb29@iitbbs.ac.in; dpdogra@iitbbs.ac.in).
+Pradeep Kumar and Partha P. Roy are with the Department of Computer
+Science, Indian Institute of Technology Roorkee, Roorkee 247667, India
+(e-mail: pra14.dcs2014@iitr.ac.in; proy.fcs@iitr.ac.in).
+Digital Object Identiﬁer 10.1109/TCE.2021.3055419
+will certainly include sensors such as EMG, ECG or EEG
+in addition to conventional sensors such as IMU, ﬁnger-
+print or camera. These sensors help to measure physiological
+parameters during various activities. Therefore, the devel-
+opment of intelligent applications using the aforementioned
+advanced sensors can be started for the beneﬁt of the users.
+Authentication and veriﬁcation are very important but chal-
+lenging features in CE handheld devices. Thus, the exploitation
+of advanced sensors for designing authentication protocol
+seems to be a timely activity.
+Typical device authentication processes use biometric traits
+or features to verify whether a person is authorized to access
+the device or not. Air signature/gesture in 3D is a well-known
+biometric authentication process used in many setups. Air
+writing has the advantage of touch-less or paper-less authen-
+tication. Moreover, air signatures can be captured in 3D using
+motion sensors. Users can put signatures at random positions
+during air writing, enabling more security because it is difﬁ-
+cult for the intruders to ﬁnd the exact location of the signature.
+While signing in the air, users can randomly scribble before
+and/or after the actual signature. This makes it difﬁcult to
+localize the signature. However, existing gesture-based authen-
+tication systems are prone to shoulder surﬁng attacks. Thus,
+incorporating additional information such as cerebral activities
+(through EEG responses) in the feature vector can make such
+systems robust to shoulder surﬁng attacks.
+A. Motivation and Contributions
+Air signatures are becoming very popular for biometric
+authentication. However, such systems are subject to identify
+theft if a professional forger observes or video-records the
+signing process. Therefore, we need to enhance the robust-
+ness of the signing process. One way can be to ask the signer
+to put the signature within a random writing. This will ensure
+that the forger does not get information about the start and end
+points of the actual signature. During the veriﬁcation, ﬁrst we
+need to localize or spot the signature in the random writing,
+followed by the actual veriﬁcation. In other words, spotting is
+a problem that works at a coarser level and it does not defy
+the basic objective of biometric authentication. It can be stated
+that, despite erroneous spotting, veriﬁcation can be achieved
+with higher accuracy if the feature-set is robust. Moreover,
+1558-4127 c⃝2021 IEEE. Personal use is permitted, but republication/redistribution requires IEEE permission.
+See https://www.ieee.org/publications/rights/index.html for more information.
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+BEHERA et al.: ROBUST BIOMETRIC AUTHENTICATION SYSTEM FOR HANDHELD ELECTRONIC DEVICES
+59
+spotting needs to be fast since the processing is done across
+multiple temporal windows of the signal. Therefore, high-level
+features such as slope, direction, and curvature cannot be used
+as the process becomes time-consuming. This is the primary
+motivation to use simple but effective global feature that is
+less time consuming. However, the spotted regions may not
+fully contain the signature. Therefore, veriﬁcation using the
+existing high-level features, as discussed earlier, may not be
+accurate. Thus, we used statistical information extracted from
+the EEG of the user for veriﬁcation. To accomplish this, the
+following technical contributions are made:
+• This article proposes a method to combine air signatures
+with cerebral activities (EEG responses) to implement a
+new biometric authentication process suitable for next-
+generation consumer electronic devices.
+• A heuristic-based solution has been proposed to spot and
+localize the air signature segments in random writing.
+The rest of the article is organized as follows. In Section II,
+we discuss the existing related works. The data acquisition and
+the feature extraction processes are described in Section III
+and Section IV, respectively. The training process adopted in
+this article is presented in Section V. Proposed veriﬁcation
+methodology is described in Section VI. Results are presented
+in Section VII. Conclusion and future work are reported in
+Section VIII.
+II. RELATED WORK
+Kim and Hong [2] proposed a new multimodal biomet-
+ric authentication approach using teeth image and voice as
+biometric traits to protect private information stored in the
+mobile devices. The method has an ERR of 2.13% over 1000
+images. Liu and Song [3] proposed a real-time embedded
+ﬁnger-vein recognition system for authentication on mobile
+devices which takes about 0.8 seconds to verify one input
+ﬁnger-vein sample with an EER rate of 0.07% over a database
+of 100 subjects. Galka et al. [4] presented the concept of the
+embedded solution for voice biometric access system as well
+as automatic speech processing methods keeping performance
+optimization methods as one of the main concern. To over-
+come various challenges associated with iris acquisition on
+handheld imaging devices, Thavalengal et al. [5] suggested
+potential solutions for unconstrained acquisition using smart-
+phones. Bao et al. [6] designed hand-gesture recognition
+network that can classify seven sorts of hand gestures in a
+user-independent manner and on real time. Lee [7] discussed
+security issue and advancement for human shoulder-surﬁng
+resistant personal identiﬁ˛
+Acation number (PIN) entry meth-
+ods used in ATMs, mobile devices, and electronic door locks.
+Papadopoulos et al. [8] proposed a PIN-based authentication
+method that operates on touchscreen devices. The idea behind
+this was to use hybrid images to blend two keypads with dif-
+ferent digit orderings one for the user close to the device and
+another for the attacker who is looking at the device from
+a bigger distance. Sun et al. [9] proposed an authentication
+system PassMatrix, which is based on graphical passwords
+to resist shoulder surng attacks. Basically, the authors tried
+to overcome the weakness of humans for choosing a bad
+password, to resist shoulder surng attacks as well as multiple
+camera-based attacks. Zhu et al. [10] tried to explore AI prob-
+lems and captcha as a graphical password (CaRP) scheme to
+improving online security that are resistant to online guessing
+attacks, relay attacks and shoulder-surng attacks and image
+hotspot problem. However, aforementioned methods suffer
+from a few problems, namely ease of use, shoulder surﬁng
+attacks, inadequacy in number of samples, etc.
+To
+address
+some
+of
+the
+aforementioned
+problems,
+researchers proposed several improvements. For example,
+Shahzad et al. [11] proposed authentication scheme (known
+as BEAT) based on the user behavior of performing certain
+actions on the touch screens through gestures or signatures.
+Sengupta and Rathor [12] presented a design methodology
+of securing hardware accelerators against IP piracy and false
+claims of IP ownership. Labati et al. [13] proposed a touchless
+ﬁnngerprint recognition system based on the computation of
+3D models. In [14], the authors further explored to the exten-
+sion called Secure Drag-and-Type for securing the password
+entry against shoulder-surﬁng and spyware attacks. Vhaduri
+and Poellabauer [15] presented an implicit wearable device
+user authentication mechanism using combinations of three
+types of coarse-grain minute-level biometric features. These
+methods try to address shoulder surﬁng issues and easy of
+access.
+More recently, Electroencephalography (EEG) and motion
+sensors are used independently as well as in combina-
+tions to design brain-computer interface (BCI) applications
+including biometric authentication and veriﬁcation [16]–[21],
+gaming [22]–[24], physical rehabilitation [25], security [26],
+visual object classiﬁcation through brain activities [27], mar-
+keting [28], 3D handwriting and signature recognition [29],
+gait-related brain activity detection [30], etc. However, other
+than the modalities, features and classiﬁers are also important.
+For examples, high-level features [29], 3D histogram of ori-
+ented trajectories (HOT) and histogram of oriented optical ﬂow
+(HOOF) [31] are popular. To estimate the distance between the
+feature vectors, Dynamic time warping (DTW) [32] or mini-
+mal variance matching (MVM) [33] can be used. Classiﬁers
+such as Hidden Markov Model (HMM) [34], Support Vector
+Machine (SVM) [35], Neural Networks (NN) [36], [37], and
+Random Forest [38] are typically used for the classiﬁcation.
+Signatures can be imitated by impostee ers if they are
+allowed to observe the ﬁnger movements. To make signa-
+tures secure, people may be encouraged to sign in the air
+randomly. However, random writing makes a typical biomet-
+ric setup complex. This is because, spotting of the signature is
+extremely important. In this article, a new approach has been
+proposed to spot signatures in random air writing and then
+verify by analyzing the EEG responses. As EEG response is
+unique, it can help to improve the robustness. Also, the signal
+can be captured conveniently using low-cost commercial sen-
+sors [39]. Therefore, such sensors are already in use with the
+handheld devices [40], [41].
+III. DATA ACQUISITION
+The dataset that has been used in this work for experiments,
+was prepared in two phases: (i) In training stage, we collected
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+60
+IEEE TRANSACTIONS ON CONSUMER ELECTRONICS, VOL. 67, NO. 1, FEBRUARY 2021
+Fig. 1.
+A typical view of forward ﬁnger motion in the interaction space
+during air signature.
+motion data as well as EEG recordings during only signature
+(without scribble). (ii) In the next stage, collection of motion
+sensor data and corresponding EEG responses were recorded.
+A motion sensor and an EEG sensor were used for acquiring
+the data. The motion sensor was used to collect index ﬁnger’s
+movement during the signature. The EEG sensor was used to
+collect the cerebral activity of the user during air writing. The
+EEG device used in our work supports wireless connectivity
+with noise reduction techniques. The device is low cost as
+compared to other commercial EEG recording setups. Also,
+the headband EEG device does not require special liquid for
+recording the brain activities. This ensures that such devices
+can be used by mass and outside the laboratory environment.
+However, as the sensors used in our work are not used in
+everyday life, a convenient recording setup was prepared to
+guide the users. The users were given preliminary guidance to
+get acquainted with these sensors and their working principles.
+A. Experimental Setup and Protocol
+3D positions of the ﬁngertips can be captured when they are
+placed within the ﬁeld of view of the motion sensor. The sensor
+has a ﬁeld of view similar to an inverted pyramidal structure
+with a range of 150◦and it creates a 250 mm × 150 mm
+interaction area as depicted in Fig. 1. A typical EEG setup with
+14 electrodes as shown in Fig. 2, was used to record data and
+test its performance. Using both setups, physical movements
+and brain activities were recorded simultaneously. A set of
+guidelines were prepared and shared with the users to under-
+stand the experimental setup. First, the users were instructed
+about the working principles of these sensors. Next, the users
+were asked to put their hands within the ﬁeld of view of the
+motion sensor. The users were asked to write in the air using
+their index ﬁnger while keeping other ﬁngers closed as shown
+in Fig. 1. During the signature registration, EEG signals were
+also recorded using the setup shown in Fig. 2.
+IV. FEATURE EXTRACTION
+This section discusses the feature extraction process. There
+are two types of features (i) Global features of ﬁnger
+movement in 3D and (ii) statistical features extracted from
+the EEG data.
+A. 3D Global Features
+Finger motion in 3D is scaled within [0,1] across three coor-
+dinate axes. A set of coarse-level features are extracted from
+the normalized data that represent the geometrical structure of
+the 3D trajectory representing ﬁnger movement. Geometrical
+Fig. 2.
+A typical view of the EEG setup that has been used for recording
+cerebral activities.
+Fig. 3.
+A typical 3D orientation of motion data with various parameters used
+to construct the feature vector, where C represents the centroid of the data.
+a, b, and c represent the direction ratios of the line joining from the maxima
+or minima position to the centroid. d represents the normalized distance from
+the maxima or minima position to the centroid.
+features f as deﬁned in (1) are extracted from maxima and
+minima positions across all the axes as shown in Fig. 3,
+f = [a, b, c, d]
+(1)
+In the aforementioned equation, a, b, c represent the direction
+ratios of the line joining from the maxima or minima position
+to the centroid of the 3D trajectory and d is the normalized
+distance from the maxima or minima position to the centroid
+of the track as shown in the Fig. 3. The trajectory can be
+represented using a 3D global feature vector Fgl that is the
+collection of feature-set f extracted from all six maxima or
+minima positions as denoted in (2).
+Fgl =
+⎡
+⎢⎢⎢⎢⎢⎢⎣
+axmin
+bxmin
+cxmin
+dxmin
+axmax
+bxmax
+cxmax
+dxmax
+aymin
+bymin
+cymin
+dymin
+aymax
+bymax
+cymax
+dymax
+azmin
+bzmin
+czmin
+dzmin
+azmax
+bzmax
+czmax
+dzmax
+⎤
+⎥⎥⎥⎥⎥⎥⎦
+.
+(2)
+B. EEG Features
+EEG signals may be corrupted by motion artefacts due to the
+body parts movement during air signature. Therefore, raw EEG
+signals have been smoothed using Savitzky Golay (S-Golay)
+ﬁlter as discussed hereafter.
+Pre-Processing Using S-Golay Filter: Noisy EEG signals
+are ﬁrst smoothed using a least square or polynomial-based
+approach called S-Golay Filter [42]. A low-degree polynomial
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+BEHERA et al.: ROBUST BIOMETRIC AUTHENTICATION SYSTEM FOR HANDHELD ELECTRONIC DEVICES
+61
+Fig. 4.
+1. Raw signal 2. gamma band 3. beta band 4. alpha band 5. theta
+band and 6. delta band waves of decomposed DWT of one electrode.
+is used to ﬁt consecutive subsets of neighboring sample points.
+Let Si = f(ti) be a signal with n samples. S-Golay ﬁlter can
+be applied using (3),
+Qi =
+p−1
+2
+
+j=−p−1
+2
+cj Si+j,
+p + 1
+2
+≤i ≤n −p −1
+2
+(3)
+where Q represents the smoothed signal, p denotes the frame
+span, and cj represents the number of convolution coefﬁcients.
+Values of cj are computed using frame span p with the help of
+a quadratic polynomial. The main advantage of this approach
+is that, it ensures to preserve features of the distribution such as
+relative maxima, minima, and width that are usually ’ﬂattened’
+by other averaging techniques such as moving average ﬁlter.
+We empirically set the windows size to 5 that worked ﬁne on
+the dataset.
+Extraction of Discrete Wavelet Transform (DWT) Features:
+DWT is a well-known approach for processing EEG signals.
+In DWT, multistage decomposition is used to convert an input
+signal into a series of small waves [43]. Decomposition of
+different frequency bands into approximation (A) and detail
+(D) coefﬁcients is used to analysed a signal. Fig. 4 shows a
+schematic decomposition of an EEG signal, where Low pass
+ﬁlter (L) and High pass ﬁlter (H) have been used to ﬁlter the
+signals from noise. High-frequency ﬂuctuations are removed
+from the signal and preserves slow trends using Low-pass ﬁlter
+(L). An approximation (A) of the signal are obtained by the
+outputs of low-pass ﬁlters. The slow trends are removed from
+the signal to preserve high-frequency ﬂuctuations using High-
+pass ﬁlter (H). The wavelet coefﬁcients that represent detail
+(D) information about the signal, are obtained using the output
+of the high-pass ﬁlter. The detail coefﬁcients at next level can
+Fig. 5.
+A block diagram of typical training process.
+be obtained by passing the approximation coefﬁcients to L and
+H ﬁlters again and so on.
+Four levels of EEG signal decomposition have been applied
+using the Daubechies 4 (DB4) wavelet decomposition tech-
+nique. D1, D2, D3, D4, and A4 are the ﬁve coefﬁcients that can
+correlate with the EEG spectrum of ﬁve different frequency
+bands popularly known as delta (1-4 Hz), theta (4-8 Hz),
+alpha (8-13 Hz), beta (13-22 Hz), and gamma (32-100 Hz),
+respectively. Gamma band waves are taken into feature con-
+struction as their variations have successfully been used for
+similar applications and analysis [44]. All 14 channels of EEG
+recordings are processed using the above analysis and standard
+deviation is estimated using (4),
+SD =
+	
+
+
+
+1
+n −1
+n
+
+i=1
+(xi −x)
+(4)
+where xi, x and n represent the ith signal, mean, and number of
+samples. Finally, a 14-dimensional feature vector is obtained
+as given in (5) corresponding to the gamma band wave,
+F = {e1, e2, e3, e4, . . . , e14}
+(5)
+where ei represents the feature corresponding to the ith
+electrode.
+V. TRAINING PROCESS
+During the training process as depicted in the Fig. 5, users
+register their signatures using ﬁngertip movements by wearing
+the EEG device. 3D motion data and corresponding EEG data
+have been collected using the process discussed in Section III.
+Features have been extracted from the training data using the
+methods discussed in Section IV. HMM and RF classiﬁers
+have been used to train the classiﬁers. HMM has been used
+due to its ability to model temporal data. The classiﬁer has
+been successfully used in speech, text and gesture recognition
+problems [29]. In our study, both EEG and 3D motion data
+are of temporal nature. Therefore, we used HMMs to model
+the sequential nature of the data. Similarly, Random Forest is
+a machine learning algorithm that works nicely on temporal
+data. It produces good results even without hyper-parameter
+tuning. Additionally, Random forests use the bagging tech-
+nique which is based on averaging multiple deep decision
+trees. Parameters like window length W and sliding parameter
+L are estimated as described below.
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+62
+IEEE TRANSACTIONS ON CONSUMER ELECTRONICS, VOL. 67, NO. 1, FEBRUARY 2021
+Fig. 6.
+A block diagram of the proposed signature spotting and veriﬁcation
+processes.
+Let Si = [s1, s2, s3, . . . , sm] be the set of m signatures
+registered by the ith user. W and L are estimated using (6)-(7),
+Wi = 1
+m
+m
+
+j=1
+si
+j
+
+(6)
+Li = 1
+m
+m
+
+j=1
+li
+j
+(7)
+where |si
+j| is denoted as the number of sample points in sj of the
+ith user and Li
+j is the distance along x direction from the starting
+point to the local y-maxima point in the jth signature of ith user.
+Threshold values, namely DMax and DMin are estimated using
+DTW as described in (8)-(9),
+Di
+Max = Max
+
+D1, D2, . . . , Dm
+(8)
+Di
+Min = Min
+
+D1, D2, . . . , Dm
+(9)
+where Di=DTW(sp, sq), and ∀p, q ∈m represent two indices
+of the signature samples such that p̸ = q. Di is the DTW
+distance between two samples sp and sq of the ith user. These
+samples are represented using (2), e.g., sp = Fp
+gl and sq = Fq
+gl.
+VI. SPOTTING AND VERIFICATION OF SIGNATURES
+The methodology is divided into two phases, namely signa-
+ture spotting and signature veriﬁcation as shown in the Fig. 6.
+In the ﬁrst phase, probable locations of signatures (within ran-
+dom writing) are obtained using 3D global features extracted
+from the ﬁnger movement data acquired through motion sensor
+interface. A sliding window-based method has been consid-
+ered to spot the possible locations of the signature within a
+random writing. In the next phase, the EEG data correspond-
+ing to the spotted locations are tested using HMM and RF for
+veriﬁcation.
+A. Spotting Using Global Features
+Probable location of the signature within random air writing
+can be identiﬁed in the spotting phase. A sliding-window-
+based approach as shown in Fig. 7 has been adopted for
+spotting.
+In the proposed sliding window-based approach, values of
+W and L estimated during the training phase, are used for
+re-positioning of the next window. To reduce computational
+overhead during the sliding process, the selection of the start-
+ing point of the next window is important. The selection
+Fig. 7.
+Signature spotting using 3D global features and supervised
+classiﬁcation.
+process adopted in this work can be understood from the exam-
+ple given hereafter. Let x1 and x2 be the distances from the
+staring point of the window to the ﬁrst local y-maxima and
+second local y-maxima points, respectively along the x-axis as
+shown in Fig. 8. Now, the distance from the starting point of
+the current window to the starting point of the next window
+(δx) can be estimated as follows:
+δx =
+x2 −L, if (x2 −x1) ≥L
+x1,
+otherwise.
+If there is no second local y-maxima toward the positive direc-
+tion after the ﬁrst local y-maxima within the current window,
+the next window starts from the position of the ﬁrst y-maxima.
+DTW has been used to ﬁnd the matching score with the
+stored feature vectors in the training dataset. After processing
+every window, a few of the closely matching windows (within
+a predeﬁned threshold) are considered as probable candidates
+that may contain the signatures. These windows are then pro-
+cessed for spotting the location of the signature. Assume
+n users are involved during the data collection process and
+each user has registered m signatures. Features of the training
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+BEHERA et al.: ROBUST BIOMETRIC AUTHENTICATION SYSTEM FOR HANDHELD ELECTRONIC DEVICES
+63
+Fig. 8.
+A typical random writing with sliding window depicting various
+parameters.
+samples are extracted using (2). Let Fi = {F1
+gl, F2
+gl, . . . , Fm
+gl}
+represents the set of feature vectors of m samples of the ith user
+and stest be a random writing sequence of a user who claims
+to be the ith user. The aim is to spot the signature within stest.
+Thus, every window of the test sample is compared with the
+training set of the ith user using DTW matching score as given
+in (10),
+Di
+j = DTW
+
+Fj
+gl, Fk
+test
+
+(10)
+where Fj
+gl represents the feature vector of the jth training sam-
+ple of the ith user and Fk
+test is the feature vector of the kth
+window of the given test sequence stest. Average of Di
+j val-
+ues for the kth window is calculated using (11). This values
+is used against the thresholds (Dmin and Dmax) to validate the
+signature for veriﬁcation.
+AVGDi
+k = 1/m
+m
+
+j=1
+Di
+j
+(11)
+Now, a decision to keep or reject the kth window is taken
+based on the condition as mentioned in (12),
+Di
+min < AVGDi
+k < Di
+max
+(12)
+where Di
+min and Di
+max represent the minimum and maximum
+distances obtained across all training samples of the ith user as
+explained earlier. This is repeated for all windows of the test
+sequence and ﬁnally the window with the minimum distance
+is assumed to contain the signature of the user. If no candi-
+date window is found satisfying the condition given in (12),
+it is assumed that the random writing does not contain any
+signature of the ith user.
+B. Veriﬁcation of Signatures
+Since the spotted window may not fully contain the signa-
+ture, it often becomes difﬁcult to verify the signature using the
+geometrical 3D features of that window. Therefore, the brain
+signals have been used for veriﬁcation to reduce false rejec-
+tion rates. EEG signals may be corrupted by motion artefacts
+due to the movement of the body parts during air signa-
+ture. Therefore, raw EEG signals are smoothed using Savitzky
+Golay (S-Golay) ﬁlter. After spotting using geometrical fea-
+tures, the EEG signals of the corresponding window are used
+in veriﬁcation.
+• Veriﬁcation Using HMM: For EEG, gamma features are
+trained using HMM classiﬁer. We created HMM mod-
+els for all users using Baum-Welch training algorithm.
+θ = (T, O, π) represents each HMM model, where T
+denotes state transition matrix, O denotes observation
+matrix, and π denotes initial state probabilities [29], [34].
+After training, a test window (spotted EEG window) is
+compared with all the models and measure probability
+of matching, i.e., likelihood. The model which gives the
+largest likelihood value, is assumed to be the user to
+whom the signature possibly belongs.
+• Veriﬁcation Using RF: The feature vector deﬁned in (5) is
+then used for classiﬁcation of a typical input EEG frame
+corresponding to the spotted signatures. A RF-based clas-
+siﬁer has been used for classiﬁcation. Random Forest is
+represented as the collection of classiﬁcation trees, where
+each decision tree assigns the input data to one of the
+assigned classes [45].
+VII. RESULTS AND DISCUSSIONS
+This section describes the data as well as presents the results
+of spotting and veriﬁcation. To the best of our knowledge, such
+multi-sensor datasets are not publicly available. Therefore, in
+our laboratory environment, we created a multi-sensor dataset
+involving 20 users with the help of motion and EEG sensors.
+We tested our approach using this dataset which we made
+available to the researchers.1
+A. Dataset Description
+There is no publicly available multi-sensor dataset for the
+present task. Therefore, we made a setup in our lab environ-
+ment to collect the air signatures as well as EEG responses.
+We involved 12 male and 8 female participants in the data
+collection. Half of the participants were below the age of 25
+years and others were aged above 40 years. Each user was
+asked to provide 10 samples in two sessions (morning and
+evening). Motion sensor data and EEG signals were recorded
+simultaneously. The dataset has been used for training. In the
+next phase, these users were asked to provide signatures in air
+within some random writing as depicted in Fig. 9. Therefore,
+additional 200 samples were collected for testing. A summary
+of the dataset is presented in Table I.
+B. Signature Spotting Results Using Global Features
+Spotting results are presented ﬁrst. A window is selected
+based on the analysis using global features when more than
+60% of the segment within the window overlaps with the
+actual signature segment (ground truth). Such segments (win-
+dows) are considered as valid signatures as depicted in Fig. 10.
+User-wise spotting accuracy values are presented in Fig. 11.
+Overall accuracy of the spotting has been found to be 91.0%.
+1https://sites.google.com/view/beherask/research
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+64
+IEEE TRANSACTIONS ON CONSUMER ELECTRONICS, VOL. 67, NO. 1, FEBRUARY 2021
+TABLE I
+SUMMARY OF THE DATASET USED
+Fig. 9.
+(a) User’s signature recorded using motion sensor. (b) User puts the
+signature within a random writing.
+TABLE II
+OVERALL VERIFICATION ACCURACY VALUES AND COMPUTATION
+OVERHEAD OF SPOTTED WINDOW USING VARIOUS FEATURES WITH THE
+HELP OF HMM AND RF
+C. Results of Veriﬁcation Using EEG Features
+Veriﬁcation is applied on the spotted windows. EEG features
+corresponding to the time window of the spotted signature
+are fed to the classiﬁers. Fig. 12 presents a comparative
+results of veriﬁcation using RF and HMM-based classiﬁers.
+Average veriﬁcation accuracy using HMM has been found to
+be 95.5%. Average accuracy of veriﬁcation has been found to
+be 98.5% when RF is used as the classiﬁer. It reveals that RF
+outperforms HMM.
+D. Discussion of Results
+A summary of the results obtained using the proposed
+method is presented in Table II. Comparison of veriﬁcation
+Fig. 10.
+(a) A typical window containing the signature of a user. (b) Spotted
+signature corresponding to the window shown in Fig. 10(a).
+Fig. 11.
+User-wise signature spotting rate using 3D global features.
+of a spotted window using EEG features with high-level fea-
+tures of 3D data has been presented in this table. It has been
+observed that veriﬁcation using EEG features is better as the
+false rejection rate is reduced. It is unlikely that an imposter
+can produce random writing containing an imitated signature
+of a genuine user. Therefore, the false acceptance rate is very
+low. It has also been observed that veriﬁcation using Random
+Forest is marginally better than HMM.
+E. Analysis of Shoulder Surﬁng Attacks
+In this section, we present a discussion on how the proposed
+method can be robust to shoulder surﬁng attacks. In our earlier
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+BEHERA et al.: ROBUST BIOMETRIC AUTHENTICATION SYSTEM FOR HANDHELD ELECTRONIC DEVICES
+65
+Fig. 12. Comparison of veriﬁcation results obtained using HMM and Random
+forest.
+Fig. 13.
+Projections of a signature when viewed by two different persons
+from different angular positions.
+work [1], we presented theoretically as well as through experi-
+mental evaluation that how shoulder surﬁng attacks can happen
+on gesture-based biometric systems. The present application
+is slightly different. Also, carrying out a similar experimental
+evaluation seems to be difﬁcult at this stage due to the unavail-
+ability of trained attackers. Therefore, an in-depth theoretical
+analysis has been carried to demonstrate the robustness of the
+proposed two-stage biometric system against shoulder surﬁng
+attacks. We believe, the presented theoretical analysis can pro-
+vide new insights into shoulder surﬁng attacks. The analysis
+is as follows:
+Assume an intruder is trying to observe the signature by
+looking over the user’s shoulder during the process of air
+signature. Due to the deviation in the projection line on the
+signature, the intruder gets a different view of the original sig-
+nature. This essentially leads to a wrong pattern being watched
+by the intruder. The projection of the signature over the view-
+ing plane creates a varying image of the signature as compared
+to the original signature. Therefore, different projections cre-
+ate different views on a signature. This can be explained using
+the image presented in Fig. 13. As depicted in the ﬁgure, there
+are two different persons (the user and the intruder) who are
+viewing the signature (contained within the straight line seg-
+ment (LM) from different angular positions (0◦and θ◦). As
+per the conﬁguration, the intruder is viewing with an angle
+of θ◦that creates the projection of the signature over the line
+segment NM. This can be estimated using (13).
+NM = LM cos θ =
+LM,
+if θ = 0◦
+< LM, otherwise
+(13)
+Fig. 14.
+Signature viewed by two intruders from different positions.
+Since the original signature space (LM) is projected onto a
+smaller line segment (NM), some data points are expected
+to overlap. Hence the intruder gets an erroneous view of the
+signature. Moreover, intruders who view the signature from
+a wider angular position with respect to the user’s projec-
+tion line, are expected to accumulate more errors as the angle
+increases.
+Similarly, when two intruders are trying to observe the sig-
+nature from two different positions (with varying θ), they are
+expected to get erroneous views. Such a scenario is depicted
+in Fig. 14. If an intruder is able to ﬁnd a position that is
+very close to the position of the user, the intruder may get a
+similar view of the user. However, due to the presence of ran-
+domness in the placement of the signature within the scribble,
+it is difﬁcult for an intruder to accurately guess the start of the
+signature. Therefore, the Two-stage process proposed in this
+article is robust against shoulder surﬁng attacks.
+F. Comparative Analysis
+Since no work is available in the literature that uses ﬁngertip
+motion and EEG responses together, we performed a compar-
+ison with the existing techniques that use motion sensors for
+air signature veriﬁcation. Recently Guerra-Segura et al. [46]
+proposed an air-signature veriﬁcation system using the same
+type of motion sensor used in our work. The authors used APIs
+of the sensor for extracting six types of features by dividing
+the time-series data into multiple segments. The veriﬁcation
+was done using SVM with EERs of 0.25 and 1.25, respec-
+tively on random and expert forgers. However, in their study,
+all the forgeries were attempted by two imposters only and
+the veriﬁcation was not attempted using any temporal clas-
+siﬁers. Likewise, the authors in [47] developed a sequential
+CNN architecture for geometric features extracted from air
+signatures and reported an average veriﬁcation accuracy of
+95%. We recorded accuracy as high as 95.5% and 98.5%,
+respectively using HMM and RF classiﬁers. We observed that
+our proposed multi-modal setup performs better in compari-
+son to the aforementioned uni-modal systems. A comparison
+with other techniques is presented in Table III.
+Providing an additional modality for user veriﬁcation can
+certainly increase the system’s robustness against various
+types of attacks. The proposed application has been designed
+keeping in mind the futuristic Augmented Reality (AR) or
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+66
+IEEE TRANSACTIONS ON CONSUMER ELECTRONICS, VOL. 67, NO. 1, FEBRUARY 2021
+TABLE III
+COMPARATIVE ANALYSIS WITH EXISTING METHODOLOGIES
+Virtual Reality (VR) setups, where touch-less interactions are
+preferred. It is anticipated that such applications will be fre-
+quently used in next-generation devices as the users are rapidly
+adapting to such setups. Though attaching additional gadgets
+to the existing systems may create some discomfort to the
+users, particularly at the early stage of usage, however, our
+experience with the users involved during the training reveals
+that the level of discomfort decreases with the increasing
+number of trials. In futuristic designs, we are expecting that
+such interfaces will be commonplace. For example, the cur-
+rent extraordinary pandemic situation (COVID-19) has pushed
+humanity more towards touch-less interactions. Moreover,
+due to rapid advancement in such technologies, sophisticated
+devices are now being launched with the fewer interfaces
+(e.g., Muse2 and Neurosky3 have lesser number of electrodes).
+Due to plug-and-play nature of connections with smartphones,
+these devices are good for large scale applications.
+VIII. CONCLUSION AND FUTURE WORK
+Modern sensor technology is enriching various research
+areas including human-computer interface and biometric.
+Moreover, the integration of these sensors with the next-
+generation handheld devices is being adopted at a rapid speed.
+This article proposes a method to spot air signatures scribbled
+within the random writings recorded through portable motion
+sensors embedded in CE devices and verify these signatures
+by analyzing corresponding EEG responses. EEG responses
+are recorded using easy-to-use low-cost sensors attached with
+such devices. The classiﬁcation has been performed using
+HMM and RF classiﬁers. In the ﬁrst phase, the signatures
+are spotted using a heuristic that relies on the 3D geomet-
+rical features extracted from the raw data captured through
+the motion sensor attached with the device. In the next phase,
+spotted signatures are veriﬁed using HMM and RF classiﬁers.
+Both classiﬁers perform satisfactorily with RF has a slight
+edge over the HMM. The method can be highly effective in
+enhancing the capabilities of typical CE setups. In the future,
+advanced sequential learning methods such as temporal CNNs
+or LSTMs can be used for improving the veriﬁcation results.
+REFERENCES
+[1] S. K. Behera, S. Bhoi, D. P. Dogra, and P. P. Roy, “Robustness analysis of
+motion sensor guided air authentication system,” IEEE Trans. Consum.
+Electron., vol. 64, no. 2, pp. 171–179, May 2018.
+[2] D. Kim and K. Hong, “Multimodal biometric authentication using
+teeth image and voice in mobile environment,” IEEE Trans. Consum.
+Electron., vol. 54, no. 4, pp. 1790–1797, Nov. 2008.
+2https://choosemuse.com/compare/
+3http://neurosky.com/
+[3] Z. Liu and S. Song, “An embedded real-time ﬁnger-vein recognition
+system for mobile devices,” IEEE Trans. Consum. Electron., vol. 58,
+no. 2, pp. 522–527, May 2012.
+[4] J. Galka, M. Masior, and M. Salasa, “Voice authentication embedded
+solution for secured access control,” IEEE Trans. Consum. Electron.,
+vol. 60, no. 4, pp. 653–661, Nov. 2014.
+[5] S. Thavalengal, P. Bigioi, and P. Corcoran, “Iris authentication in
+handheld devices—Considerations for constraint-free acquisition,” IEEE
+Trans. Consum. Electron., vol. 61, no. 2, pp. 245–253, May 2015.
+[6] P. Bao, A. I. Maqueda, C. R. del Blanco, and N. García, “Tiny hand ges-
+ture recognition without localization via a deep convolutional network,”
+IEEE Trans. Consum. Electron., vol. 63, no. 3, pp. 251–257, Aug. 2017.
+[7] M. Lee, “Security notions and advanced method for human shoulder-
+surﬁng resistant pin-entry,” IEEE Trans. Inf. Forensics Security, vol. 9,
+no. 4, pp. 695–708, Apr. 2014.
+[8] A. Papadopoulos, T. Nguyen, E. Durmus, and N. Memon, “IllusionPIN:
+Shoulder-surﬁng resistant authentication using hybrid images,” IEEE
+Trans. Inf. Forensics Security, vol. 12, no. 12, pp. 2875–2889, Dec. 2017.
+[9] H. Sun, S. Chen, J. Yeh, and C. Cheng, “A shoulder surﬁng resistant
+graphical authentication system,” IEEE Trans. Depend. Secure Comput.,
+vol. 15, no. 2, pp. 180–193, Mar./Apr. 2016.
+[10] B. B. Zhu, J. Yan, G. Bao, M. Yang, and N. Xu, “Captcha as graphical
+passwords? A new security primitive based on hard AI problems,” IEEE
+Trans. Inf. Forensics Security, vol. 9, no. 6, pp. 891–904, Jun. 2014.
+[11] M. Shahzad, A. X. Liu, and A. Samuel, “Behavior based human authen-
+tication on touch screen devices using gestures and signatures,” IEEE
+Trans. Mobile Comput., vol. 16, no. 10, pp. 2726–2741, Oct. 2017.
+[12] A. Sengupta and M. Rathor, “Securing hardware accelerators for CE
+systems using biometric ﬁngerprinting,” IEEE Trans. Very Large Scale
+Integr. (VLSI) Syst., vol. 28, no. 9, pp. 1979–1992, Sep. 2020.
+[13] R. D. Labati, A. Genovese, V. Piuri, and F. Scotti, “Toward unconstrained
+ﬁngerprint recognition: A fully touchless 3-D system based on two views
+on the move,” IEEE Trans. Syst. Man, Cybern. B, Cybern., vol. 46, no. 2,
+pp. 202–219, Feb. 2016.
+[14] T. Kwon, S. Na, and S. Park, “Drag-and-type: A new method for typing
+with virtual keyboards on small touchscreens,” IEEE Trans. Consum.
+Electron., vol. 60, no. 1, pp. 99–106, Feb. 2014.
+[15] S. Vhaduri and C. Poellabauer, “Multi-modal biometric-based implicit
+authentication of wearable device users,” IEEE Trans. Inf. Forensics
+Security, vol. 14, no. 12, pp. 3116–3125, Dec. 2019.
+[16] K. Aloui, A. Nait-Ali, and M. S. Naceur, “Using brain prints as new bio-
+metric feature for human recognition,” Pattern Recognit. Lett., vol. 113,
+pp. 38–45, Oct. 2018.
+[17] M. Abo-Zahhad, S. M. Ahmed, and S. N. Abbas, “A new multi-level
+approach to EEG based human authentication using eye blinking,”
+Pattern Recognit. Lett., vol. 82, pp. 216–225, Oct. 2016.
+[18] M. V. Ruiz-Blondet, Z. Jin, and S. Laszlo, “Permanence of the
+CEREBRE brain biometric protocol,” Pattern Recognit. Lett., vol. 95,
+pp. 37–43, Aug. 2017.
+[19] R.
+Saini
+et
+al.,
+“Don’t
+just
+sign
+use
+brain
+too:
+A
+novel
+multimodal approach for user identiﬁcation and veriﬁcation,” Inf. Sci.,
+vols. 430–431, pp. 163–178, Mar. 2018.
+[20] G. Dornhege, B. Blankertz, G. Curio, and K.-R. Muller, “Boosting bit
+rates in noninvasive EEG single-trial classiﬁcations by feature combi-
+nation and multiclass paradigms,” IEEE Trans. Biomed. Eng., vol. 51,
+no. 6, pp. 993–1002, Jun. 2004.
+[21] S. M. Zhou, J. Q. Gan, and F. Sepulveda, “Classifying mental tasks
+based on features of higher-order statistics from EEG signals in brain–
+computer interface,” Inf. Sci., vol. 178, no. 6, pp. 1629–1640, 2008.
+[22] M. Kostílek and J. Št’astn`y, “EEG biometric identiﬁcation: Repeatability
+and inﬂuence of movement-related EEG,” in Proc. IEEE Int. Conf. AE,
+2012, pp. 147–150.
+[23] O.-H. Cho and S.-T. Lee, “A study about honey bee dance serious game
+for kids using hand gesture,” Int. J. Multimedia Ubiquitous Eng., vol. 9,
+no. 6, pp. 397–404, 2014.
+[24] M. A. Rahman, M. Ahmed, A. Qamar, D. Hossain, and S. Basalamah,
+“Modeling therapy rehabilitation sessions using non-invasive serious
+games,” in Proc. IEEE Int. Symp. MeMeA, 2014, pp. 1–4.
+[25] K. Vamsikrishna, D. Dogra, and M. Desarkar, “Computer vision assisted
+palm rehabilitation with supervised learning,” IEEE Trans. Biomed.
+Eng., vol. 63, no. 5, pp. 991–1001, May 2016.
+[26] G. Bailador, C. Sanchez-Avila, J. Guerra-Casanova, and A. Sierra,
+“Analysis of pattern recognition techniques for in-air signature biomet-
+rics,” Pattern Recognit., vol. 44, no. 10, pp. 2468–2478, 2011.
+[27] C. Spampinato, S. Palazzo, I. Kavasidis, D. Giordano, N. Souly, and
+M. Shah, “Deep learning human mind for automated visual classiﬁca-
+tion,” in Proc. Int. Conf. CVPR, 2017, pp. 4503–4511.
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app
+BEHERA et al.: ROBUST BIOMETRIC AUTHENTICATION SYSTEM FOR HANDHELD ELECTRONIC DEVICES
+67
+[28] H. Gauba, P. Kumar, P. P. Roy, P. Singh, D. P. Dogra, and B. Raman,
+“Prediction of advertisement preference by fusing EEG response and
+sentiment analysis,” Neural Netw., vol. 92, pp. 77–88, Aug. 2017.
+[29] S. K. Behera, D. P. Dogra, and P. P. Roy, “Fast recognition and ver-
+iﬁcation of 3D air signatures using convex hulls,” Expert Syst. Appl.,
+vol. 100, pp. 106–119, Jun. 2018.
+[30] J. Chai et al., “Identiﬁcation of gait-related brain activity using elec-
+troencephalographic signals,” in Proc. 8th IEEE/EMBS Conf. NER, 2017,
+pp. 548–551.
+[31] I. Nigam, M. Vatsa, and R. Singh, “Leap signature recognition
+using hoof and hot features,” in Proc. IEEE Int. Conf. ICIP, 2014,
+pp. 5012–5016.
+[32] M. Müller, “Dynamic time warping,” in Information Retrieval for Music
+and Motion. Heidelberg, Germany: Springer, 2007, pp. 69–84.
+[33] L. J. Latecki, V. Megalooikonomou, Q. Wang, and D. Yu, “An elastic
+partial shape matching technique,” Pattern Recognit., vol. 40, no. 11,
+pp. 3069–3080, 2007.
+[34] E. M. Nel, J. A. du Preez, and B. M. Herbst, “Estimating the pen tra-
+jectories of static signatures using hidden Markov models,” IEEE Trans.
+Pattern Anal. Mach. Intell., vol. 27, no. 11, pp. 1733–1746, Nov. 2005.
+[35] K. Alister and B. Yanikoglu, “Identity authentication using improved
+on-line signature veriﬁcation method,” Pattern Recognit. Lett., vol. 26,
+no. 15, pp. 2400–2408, 2005.
+[36] J. Martinez, M. J. Black, and J. Romero, “On human motion prediction
+using recurrent neural networks,” in Proc. Int. Conf. CVPR, Piscataway,
+NJ, USA, 2017, pp. 4674–4683.
+[37] J. P. Draouhard, R. Sabourin, and M. Godbout, “A neural network
+approaches to on-line signature veriﬁcation using directional PDF,”
+Pattern Recognit., vol. 29, no. 3, pp. 415–424, 1996.
+[38] A. Liaw et al., “Classiﬁcation and regression by randomforest,” R News,
+vol. 2, no. 3, pp. 18–22, 2002.
+[39] C. A. Lim, W. C. Chia, and S. W. Chin, “A mobile driver safety system:
+Analysis of single-channel EEG on drowsiness detection,” in Proc. IEEE
+Int. Conf. Comput. Sci. Technol. (ICCST), 2014, pp. 1–5.
+[40] A. Stopczynski, C. Stahlhut, J. E. Larsen, M. K. Petersen, and
+L. K
+Hansen, “The smartphone brain scanner: A portable real-time
+neuroimaging system,” PLoS ONE, vol. 9, no. 2, 2014, Art. no. e86733.
+[41] A. Lau-Zhu, M. P. Lau, and G. McLoughlin, “Mobile EEG in research
+on neurodevelopmental disorders: Opportunities and challenges,” Dev.
+Cogn. Neurosci., vol. 36, Apr. 2019, Art. no. 100635.
+[42] R. J. Barry, F. M. De Blasio, V. De Pascalis, and D. Karamacoska,
+“Preferred eeg brain states at stimulus onset in a ﬁxed interstimulus
+interval equiprobable auditory go/nogo task: A deﬁnitive study,” Int. J.
+Psychophysiol., vol. 94, no. 1, pp. 42–58, 2014.
+[43] F. Riaz, A. Hassan, S. Rehman, I. K. Niazi, and K. Dremstrup, “EMD-
+based temporal and spectral features for the classiﬁcation of EEG signals
+using supervised learning,” IEEE Trans. Neural Syst. Rehabil. Eng.,
+vol. 24, no. 1, pp. 28–35, Jan. 2016.
+[44] R. Palaniappan and D. P. Mandic, “Biometrics from brain electrical
+activity: A machine learning approach,” IEEE Trans. Pattern Anal.
+Mach. Intell., vol. 29, no. 4, pp. 738–742, Apr. 2007.
+[45] L. Breiman, “Random forests,” Mach. Learn., vol. 45, no. 1, pp. 5–32,
+2001.
+[46] E. Guerra-Segura, A. Ortega-Pérez, and C. M. Travieso, “In-air signa-
+ture veriﬁcation system using leap motion,” Exp. Syst. Appl., vol. 165,
+Mar. 2021, Art. no. 113797.
+[47] S. K. Behera, A. K. Dash, D. P. Dogra, and P. P. Roy, “Air signature
+recognition using deep convolutional neural network-based sequential
+model,” in Proc. Int. Conf. Pattern Recognit., 2018, pp. 3525–3530.
+Santosh K. Behera received the M.Tech. degree
+from NIT Rourkela, Rourkela, India, in 2014, and
+the Ph.D. degree in computer science and engi-
+neering from the School of Electrical Sciences, IIT
+Bhubaneswar, Bhubaneswar, India, in 2019.
+His research interests include human computer
+interface, pattern recognition, and machine learning.
+Pradeep Kumar received the Ph.D. degree in com-
+puter science and engineering from IIT Roorkee,
+Roorkee, India, in 2018.
+His research interest includes gesture recognition
+and machine learning.
+Debi
+P.
+Dogra
+(Member, IEEE) received the
+B.Tech.
+degree
+from
+the
+Haldia
+Institute
+of
+Technology, India, in 2001, the M.Tech. degree
+from IIT Kanpur, Kanpur, India, in 2003, and the
+Ph.D. degree from IIT Kharagpur, Kharagpur, India,
+in 2012.
+He is currently an Assistant Professor with the
+School of Electrical Sciences, IIT Bhubaneswar,
+Bhubaneswar,
+India.
+He
+was
+with
+Samsung
+Research, India, from 2011 to 2013. He worked
+with ETRI, South Korea, from 2006 to 2007. He
+worked on the Faculty of Computer Science & Engineering with the Haldia
+Institute of Technology (HIT) from 2003 to 2006. He has published more
+than 100 research papers in international journals and conferences. He has
+obtained three U.S. patents. His research interests include visual surveillance,
+augmented reality, and human computer interface.
+Partha P. Roy (Member, IEEE) received the B.Tech.
+degree from the University of Kalyani, India, in
+2002, and the M.S. and Ph.D. degrees from the
+Autonomous University of Barcelona, Spain, in
+2010.
+He is currently an Associate Professor with IIT
+Roorkee, Roorkee, India. He was with Samsung
+Research Institute, India, from 2013 to 2014. He
+worked as a Postdoctoral Research Fellow with
+Synchromedia Lab, Canada, and with RFAI Lab,
+France, from 2010 to 2013. He has worked as an
+Assistant System Engineer with TCS, India, from 2003 to 2005. He has pub-
+lished more than 225 research papers in international journals and conferences.
+His research interests are pattern recognition, computer vision, bio-signal
+analysis, EEG-based pattern analysis, and multilingual text recognition. He
+is an Associate Editor of IET Image Processing, IET Biometrics, IEICE
+Transactions on Information and Systems, and Nature Computer Science
+(Springer).
+horized licensed use limited to: AMRITA VISHWA VIDYAPEETHAM AMRITA SCHOOL OF ENGINEERING. Downloaded on September 08,2026 at 04:30:52 UTC from IEEE Xplore.  Restrictions app

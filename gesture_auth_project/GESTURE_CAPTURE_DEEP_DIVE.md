@@ -1,801 +1,500 @@
-# 📹 WaveLock Gesture Capture Deep Dive
+# 📹 WaveLock Gesture & Biometric Capture Deep Dive
 
-> **The Complete Registration Sequence — From Username to Saved Template**
+> **The Complete Registration Sequence — From Facial Identity to Calibrated Gesture Templates**
 
-This document walks you through **exactly** what happens when a user runs `python gesture_capture.py` and registers their gesture. Every stage is explained in detail with real examples using actual data from the system.
+This document walks you through **exactly** what happens when a user runs `python gesture_capture.py` to register an identity. Every stage is explained in complete mathematical and algorithmic detail with real code examples and terminal traces.
 
 ---
 
 ## Table of Contents
 
-1. [Overview: What Registration Does](#1-overview)
-2. [Step 0: Program Startup & Username Input](#2-step-0)
-3. [Step 1: MediaPipe & Camera Initialization](#3-step-1)
-4. [Step 2: The Recording Loop — Capturing 5 Samples](#4-step-2)
-5. [Step 3: Recording a Single Sample (3 Seconds)](#5-step-3)
-6. [Step 4: Spatial Normalization — Per Frame](#6-step-4)
-7. [Step 5: Temporal Normalization — Across Frames](#7-step-5)
-8. [Step 6: Threshold Calibration — The Brain of the System](#8-step-6)
-9. [Step 7: Saving to Disk](#9-step-7)
-10. [Step 8: What the Final Output Looks Like](#10-step-8)
-11. [Complete Walkthrough: Registering "saimani" with Gesture "1-2-4-3"](#11-walkthrough)
-12. [Quick Reference](#12-reference)
+1. [Overview: The 2-Stage Enrollment Pipeline](#1-overview)
+2. [Step 0: Program Startup & Username Validation](#2-step-0)
+3. [Step 1: Stage 1 — Facial Profile Enrollment (`capture_face_enrollment_phase`)](#3-step-1)
+4. [Step 1B: Standalone Face Enrollment Tool (`enroll_face.py`)](#4-step-1b)
+5. [Step 2: Stage 2 — MediaPipe & Camera Initialization](#5-step-2)
+6. [Step 3: The Multi-Sample Recording Loop (5 Samples with Quality Gate)](#6-step-3)
+7. [Step 4: Recording a Single Sample (2–3 Seconds)](#7-step-4)
+8. [Step 5: Spatial Normalization (Wrist-Origin, Unit-Sphere)](#8-step-5)
+9. [Step 6: Temporal Normalization (60 Frames via SciPy)](#9-step-6)
+10. [Step 7: The Quality Gate (Outlier Detection)](#10-step-7)
+11. [Step 8: MAD-Based Robust Threshold Calibration](#11-step-8)
+12. [Step 9: Cohort-Based Negative Sampling (6 Synthetic Impostors)](#12-step-9)
+13. [Step 10: Saving to Disk & Template Preservation](#13-step-10)
+14. [Step 11: Complete End-to-End Walkthrough Trace](#14-step-11)
+15. [Quick Reference & Disk Artifacts](#15-reference)
 
 ---
 
-## 1. Overview: What Registration Does {#1-overview}
+## 1. Overview: The 2-Stage Enrollment Pipeline {#1-overview}
 
-Registration is where the system **learns** your gesture. It creates a mathematical model of how *you* perform your gesture — capturing not just what the gesture looks like in a single perfect performance, but also the natural variation between multiple performances. This variation is used to calculate personalized security thresholds.
+Registration is where WaveLock builds a personalized mathematical model of **who you are** and **what you know**.
+
+Traditional gesture systems only record hand movement, leaving them completely vulnerable if an observer watches the gesture. Conversely, traditional face systems only capture a static picture, making them vulnerable to 2D photo spoofs. WaveLock binds both modalities during a seamless 2-stage enrollment:
 
 ```mermaid
 graph TD
-    A["🖥️ User runs gesture_capture.py"] --> B["👤 Enter username"]
-    B --> C["📷 Open webcam + MediaPipe"]
-    C --> D["🔴 Record Sample 1 of 5"]
-    D --> E["🔴 Record Sample 2 of 5"]
-    E --> F["🔴 Record Sample 3 of 5"]
-    F --> G["🔴 Record Sample 4 of 5"]
-    G --> H["🔴 Record Sample 5 of 5"]
-    H --> I["🧮 Compute pairwise DTW distances (10 pairs)"]
-    I --> J["📊 Calibrate Gate 1: DTW threshold"]
-    I --> K["📊 Calibrate Gate 2: Finger state threshold"]
-    I --> L["📊 Calibrate Gate 3: Transition order threshold"]
-    I --> M["📊 Calibrate Gate 4: Segment max threshold"]
-    J & K & L & M --> N["💾 Save 5 .npy files + config.json"]
-    N --> O["✅ Registration Complete!"]
+    A["🖥️ User runs gesture_capture.py"] --> B["👤 Enter username (e.g. saimani)"]
+    B --> C["📷 Open Webcam Feed"]
+    
+    %% Stage 1
+    C --> D["STAGE 1: Facial Profile Enrollment"]
+    D --> D1["Detect frontal face via OpenCV YuNet"]
+    D1 --> D2["User presses [SPACE] when green box appears"]
+    D2 --> D3["Capture 5 high-fidelity frames"]
+    D3 --> D4["Extract 128-D SFace embedding vectors"]
+    D4 --> D5["Average & L2-normalize master embedding"]
+    D5 --> D6["💾 Save to templates/<user>/face_embedding.npy"]
+    
+    %% Stage 2
+    D6 --> E["STAGE 2: Dynamic Gesture Enrollment"]
+    E --> F["🔴 Record Sample 1 of 5"]
+    F --> G["🔴 Record Sample 2 of 5"]
+    G --> H["🔍 Interactive Quality Gate Activates (Sample 3+)"]
+    H --> I["🔴 Record Sample 3 of 5"]
+    I --> I2{"Quality OK?"}
+    I2 -->|"✓ Accepted"| J["🔴 Record Sample 4 of 5"]
+    I2 -->|"✗ Outlier → re-record"| I
+    J --> J2{"Quality OK?"}
+    J2 -->|"✓ Accepted"| K["🔴 Record Sample 5 of 5"]
+    J2 -->|"✗ Outlier → re-record"| J
+    
+    %% Calibration & Save
+    K --> L["🧮 Compute 10 pairwise DTW distances (C(5,2))"]
+    L --> M["📊 Calibrate thresholds using MAD (robust statistics)"]
+    M --> N["🧪 Cohort uniqueness check (6 synthetic impostors)"]
+    N --> O["💾 Save gesture_1.npy ... gesture_5.npy + config.json"]
+    O --> P["🔒 Anchor face_embedding.npy (Preserve facial profile)"]
+    P --> Q["🎉 Registration Complete!"]
 ```
 
 > [!IMPORTANT]
-> Registration is not just "save a gesture." It's a statistical calibration process. The system records you performing the gesture 5 times specifically so it can measure **how much your own performances naturally vary**. This variation defines how strict or lenient the security thresholds will be for your account.
+> Registration creates a complete multimodal profile:
+> 1. **High-Entropy Facial Vector**: 128 floating-point numbers on the unit hypersphere.
+> 2. **5 Normalized Gesture Samples**: Each of shape `(60, 21, 3)`.
+> 3. **4 Personalized Security Thresholds**: Auto-tuned using outlier-resistant Median Absolute Deviation (MAD).
+> 4. **Anthropometric Hand Geometry Profile**: 5 posture-invariant bone ratios calibrated from the metacarpal palm plate (`metacarpal_invariant_v2`).
+> 5. **Kinematic Rhythm Profile**: 10-bin velocity histogram, jerk baseline, peak velocity phase, and dwell limits.
 
 ---
 
-## 2. Step 0: Program Startup & Username Input {#2-step-0}
+## 2. Step 0: Program Startup & Username Validation {#2-step-0}
 
-### What the code does
-
-When you run `python gesture_capture.py`, the `main()` function in [gesture_capture.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/gesture_capture.py) executes.
-
-### 2a. Banner Display
-
-```
-==========================================================
-   GESTURE REGISTRATION — Biometric Auth System
-==========================================================
-```
-
-### 2b. List Existing Users
-
-The function `list_registered_users()` from [gesture_compare.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/gesture_compare.py) scans the `templates/` directory:
-
-```python
-# It looks for folders containing gesture_1.npy or gesture.npy
-for entry in sorted(os.listdir(templates_dir)):
-    user_dir = os.path.join(templates_dir, entry)
-    has_new = os.path.exists(os.path.join(user_dir, "gesture_1.npy"))
-    has_old = os.path.exists(os.path.join(user_dir, "gesture.npy"))
-    if has_new or has_old:
-        users.append(entry)
-```
-
-Output:
-```
-  Existing users: saimani, testing
-```
-
-### 2c. Username Input & Validation
+When you run `python gesture_capture.py`, `main()` initializes the registration session:
 
 ```python
 username = input("  Enter a username to register: ").strip()
 username = username.lower().replace(" ", "_")   # Normalize: "Sai Mani" → "sai_mani"
 ```
 
-If the username already exists, you're prompted to confirm re-registration:
+If the username already exists:
 ```
   User 'saimani' already exists. Re-register? (y/n): y
 ```
 
-### 2d. Setup Message
-
+Output:
 ```
   Registering: saimani
-  You will record your gesture 5 times.
-  Perform the SAME gesture each time for best accuracy.
+  Stage 1: Face Enrollment -> Stage 2: 5 Gesture Samples
 ```
-
-The `NUM_REGISTRATION_SAMPLES = 5` constant (defined in [gesture_compare.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/gesture_compare.py#L39)) determines how many times you perform the gesture. Five samples gives 10 pairwise comparisons (C(5,2) = 10), which makes threshold calibration statistically robust.
 
 ---
 
-## 3. Step 1: MediaPipe & Camera Initialization {#3-step-1}
+## 3. Step 1: Stage 1 — Facial Profile Enrollment (`capture_face_enrollment_phase`) {#3-step-1}
 
-### MediaPipe Hands Setup
+Stage 1 binds the physical face of the person to the account before any gestures are recorded.
 
-`setup_mediapipe()` creates a neural-network-based hand detector:
+### What happens in the code
 
 ```python
+face_emb_result = capture_face_enrollment_phase(cap, username)
+```
+
+1. **OpenCV YuNet Detection**:
+   The frame is passed to `detect_primary_face(frame)` using `cv2.FaceDetectorYN`:
+   ```python
+   detector = get_face_detector(input_size=(w, h))
+   _, faces = detector.detect(frame)
+   ```
+   YuNet detects facial bounding boxes and 5 key facial landmarks (right eye, left eye, nose tip, right mouth corner, left mouth corner) at ~5 ms per frame.
+   
+2. **On-Screen Visual Guide**:
+   - When a face is detected with confidence $\ge 70\%$, a **green bounding box** frames the user's face with the score.
+   - Guide prompt: `"Press [SPACE] to capture (Anti-Sibling Security) | [S] Skip"`.
+
+3. **5-Frame High-Fidelity Burst Capture**:
+   When the user presses `[SPACE]`, the system captures **5 consecutive frames** of the face:
+   ```python
+   emb = extract_face_embedding(frame, face_row)
+   captured_embs.append(emb)
+   ```
+   For each frame:
+   - `recognizer.alignCrop(frame, face_row)`: Uses the 5 landmarks to rotate, align, and crop a standardized **112×112 pixel face chip**.
+   - `recognizer.feature(aligned_face)`: Feeds the 112×112 chip into the pre-trained SFace deep neural network to produce a **128-dimensional feature embedding vector**.
+
+4. **Master Embedding Averaging & L2-Normalization**:
+   To eliminate high-frequency camera noise and subtle micro-motions, the 5 embeddings are averaged and projected onto the unit hypersphere:
+   ```python
+   master = np.mean(captured_embs, axis=0)
+   master /= np.linalg.norm(master)  # Unit length: ||master|| = 1.0
+   ```
+
+5. **Saving to Disk**:
+   ```python
+   save_path = save_face_embedding(username, master, TEMPLATES_DIR)
+   ```
+   Saves to `templates/<username>/face_embedding.npy`.
+
+6. **Safe Bypass (Legacy Mode)**:
+   If the user presses `[S]`, `capture_face_enrollment_phase` returns `None`. The system proceeds to gesture enrollment without a face, allowing backward compatibility.
+
+---
+
+## 4. Step 1B: Standalone Face Enrollment Tool (`enroll_face.py`) {#4-step-1b}
+
+If an account was already registered without a face, or if the user wants to update their face embedding (e.g. new spectacles, seasonal change), they do **not** need to re-record their 5 gesture samples.
+
+They simply run:
+```bash
+python enroll_face.py --user saimani
+```
+
+### What `enroll_face.py` does:
+- Opens the camera and tracks the face.
+- Prompts the user to look straight into the camera.
+- On `[SPACE]`, captures the 5-frame burst.
+- Computes the 128-D master vector.
+- Overwrites only `templates/<username>/face_embedding.npy` while leaving all gesture templates and `config.json` completely untouched.
+
+---
+
+## 5. Step 2: Stage 2 — MediaPipe & Camera Initialization {#5-step-2}
+
+Once the face is anchored, the system transitions to gesture enrollment:
+
+```
+  ============================================================
+    STEP 2 OF 2: Gesture Trajectory & Kinematic Enrollment
+    You will record your gesture 5 times.
+  ============================================================
+```
+
+### Camera Auto-Detection
+
+The current codebase uses `utils/camera_utils.py` which:
+- Auto-detects connected cameras via DirectShow (Windows) probing
+- Prioritizes external USB webcams (index > 0) over internal laptop cameras
+- Performs sensor warmup by flushing up to 18 initial black frames until mean brightness exceeds 8.0 (handles USB sensor auto-exposure ramp-up, typically ~12 frames / 0.8s for Logitech C270)
+- Supports CLI override with `--camera N` flag
+- Uses `open_camera()` function which handles backend selection (DirectShow on Windows, fallback to default)
+
+The camera init in `gesture_capture.py` calls:
+```python
+cap = setup_camera(camera_index=args.camera)
+```
+which delegates to `open_camera()` from `utils/camera_utils.py`.
+
+### MediaPipe Hands Setup
+```python
 hands = mp_hands.Hands(
-    static_image_mode=False,        # Video mode: uses temporal tracking
-    max_num_hands=1,                # Only detect ONE hand
-    min_detection_confidence=0.7,   # 70% confidence to initially detect
-    min_tracking_confidence=0.5,    # 50% confidence to keep tracking
+    static_image_mode=False,        # Temporal tracking mode (~30 FPS)
+    max_num_hands=1,                # Monitored hand
+    min_detection_confidence=0.7,   # 70% confidence to detect
+    min_tracking_confidence=0.5,    # 50% confidence to maintain track
 )
 ```
 
-**Why these values?**
-- `static_image_mode=False` enables MediaPipe's temporal tracking. After detecting a hand once, subsequent frames use cheaper tracking instead of full detection — this is much faster (~30 FPS).
-- `max_num_hands=1` because the gesture password uses one hand only.
-- `detection_confidence=0.7` is high enough to avoid false detections but low enough to work in imperfect lighting.
-- `tracking_confidence=0.5` is lower because once a hand is found, we trust the tracker even when it's partially occluded.
-
-### Camera Setup
-
-`setup_camera()` opens the default webcam:
-
-```python
-cap = cv2.VideoCapture(CAMERA_INDEX)         # Open camera 0
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)       # Request 640px wide
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)      # Request 480px tall
-
-# Verify it works
-ret, test_frame = cap.read()                  # Read a test frame
-```
-
-Output:
-```
-  Opening webcam (index 0)...
-  Webcam ready — resolution: 640x480
-```
-
 ---
 
-## 4. Step 2: The Recording Loop — Capturing 5 Samples {#4-step-2}
+## 6. Step 3: The Multi-Sample Recording Loop (5 Samples with Quality Gate) {#6-step-3}
 
-The system records your gesture **5 separate times**. Each recording is handled by the function `record_one_sample()`.
+The system prompts the user to perform the gesture **5 separate times**.
 
 ```python
 samples = []
+max_retries_per_sample = 3
 
-for sample_num in range(1, NUM_REGISTRATION_SAMPLES + 1):
-    print(f"  --- Sample {sample_num}/5 --- Press [R] when ready ---")
+sample_num = 1
+while sample_num <= NUM_REGISTRATION_SAMPLES:
+    retries = 0
+    accepted = False
+    while not accepted:
+        sample = record_one_sample(...)
+        is_ok, quality_msg = validate_sample_quality(sample, samples)
+        if is_ok:
+            samples.append(sample)
+            accepted = True
+        else:
+            retries += 1
+            # Re-record prompt
+```
+
+### Why 5 Samples?
+Human motor execution has natural variance. Five samples produce:
+$$inom{5}{2} = rac{5 	imes 4}{2} = 10 	ext{ pairwise comparisons}$$
+These 10 pairwise comparisons provide the empirical variance needed to calibrate tight, personalized security thresholds.
+
+---
+
+## 7. Step 4: Recording a Single Sample (2–3 Seconds) {#7-step-4}
+
+1. User presses `[R]` when ready.
+2. An on-screen progress bar fills over 2–3 seconds.
+3. For each frame where a hand is detected:
+   - MediaPipe extracts 21 3D landmarks: $(x, y, z)$ where $x, y \in [0, 1]$ are screen-normalized and $z$ represents relative depth.
+   - Stored as a NumPy array of shape `(N, 21, 3)`, where $N$ is the number of captured frames (typically 65–90 frames).
+
+---
+
+## 8. Step 5: Spatial Normalization (Wrist-Origin, Unit-Sphere) {#8-step-5}
+
+Raw coordinates depend on where the hand is on the screen and how close it is to the camera.
+
+Spatial normalization transforms the hand into a scale- and position-invariant coordinate space:
+
+```python
+def normalize_spatial(landmarks_array):
+    # 1. Translate wrist (landmark 0) to origin (0, 0, 0)
+    wrist = landmarks_array[:, 0:1, :]
+    centered = landmarks_array - wrist
     
-    sample = record_one_sample(
-        cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
-        sample_num, NUM_REGISTRATION_SAMPLES, username
-    )
+    # 2. Compute maximum distance from wrist to any landmark
+    distances = np.linalg.norm(centered, axis=2)
+    max_dist = np.max(distances)
     
-    if sample is None:
-        print("  Registration cancelled.")
-        return
+    # 3. Scale to unit sphere
+    scale = max_dist if max_dist > 1e-6 else 1.0
+    return centered / scale
+```
+
+Now the hand is centered at the wrist, and all landmarks fit within a sphere of radius $1.0$.
+
+---
+
+## 9. Step 6: Temporal Normalization (60 Frames via SciPy) {#9-step-6}
+
+Gestures vary in speed. A 2.5-second gesture might capture 75 frames; a 2.8-second gesture might capture 84 frames.
+
+Using `scipy.interpolate.interp1d`:
+```python
+def normalize_temporal(landmarks_array, target_frames=60):
+    n_frames = landmarks_array.shape[0]
+    time_original = np.linspace(0, 1, n_frames)
+    time_target = np.linspace(0, 1, target_frames)
     
-    samples.append(sample)   # Each sample is shape (60, 21, 3)
+    # Interpolate each of the 21 x 3 = 63 coordinates independently
+    interpolator = interp1d(time_original, landmarks_array, axis=0, kind='linear')
+    return interpolator(time_target)
 ```
 
-After the loop completes, `samples` is a **list of 5 NumPy arrays**, each with shape `(60, 21, 3)` — that's 60 frames × 21 landmarks × 3 coordinates.
-
-> [!NOTE]
-> **Why 5 samples instead of just 1?** You never perform a gesture exactly the same way twice. Sometimes you're a little faster, sometimes your fingers curl slightly differently, sometimes your hand is at a slightly different angle. 5 samples captures this natural human variation. The system uses these differences to learn what "acceptable variation" looks like for *your* specific gesture.
+Output: Every gesture sample is resampled to exactly **(60, 21, 3)**.
 
 ---
 
-## 5. Step 3: Recording a Single Sample (3 Seconds) {#5-step-3}
+## 10. Step 7: The Quality Gate (Outlier Detection) {#10-step-7}
 
-Each sample goes through this lifecycle inside `record_one_sample()`:
-
-### 5a. Idle State — Waiting for [R]
-
-The webcam shows your hand with MediaPipe's skeleton overlay. The status bar says:
-
-```
-Sample 1/5 — Press [R] to record
-```
-
-If no hand is visible, the status changes to:
-```
-Show your hand to the camera...
-```
-
-**You cannot start recording without a visible hand.** If you press [R] without a hand:
-```
-  [!] Cannot record — no hand detected.
-```
-
-### 5b. Recording State — 3-Second Capture
-
-When you press [R] with a hand visible:
+Starting at **Sample 3**, the system validates whether the new recording is consistent with previously accepted samples before admitting it to the template set:
 
 ```python
-is_recording = True
-recording_start_time = time.time()
-recorded_frames = []
-print("  [REC] Sample 1: recording for 3 seconds...")
+def validate_sample_quality(candidate, existing_samples, factor=1.4):
+    if len(existing_samples) < 2:
+        return True, "Initial baseline"
+    
+    # Compute DTW distance from candidate to each existing sample
+    distances_to_existing = [compute_dtw_distance(candidate, s) for s in existing_samples]
+    candidate_avg = np.mean(distances_to_existing)
+    
+    # Compute inter-sample distances among accepted samples
+    intra_distances = [...]
+    median_intra = np.median(intra_distances)
+    
+    limit = median_intra * factor
+    if candidate_avg <= limit:
+        return True, "Consistent with baseline"
+    else:
+        return False, f"Irregular motion (distance {candidate_avg:.2f} > limit {limit:.2f})"
 ```
 
-For each frame during the 3-second window:
-
-```python
-if hand_visible:
-    landmarks = extract_landmarks(results.multi_hand_landmarks[0])
-    recorded_frames.append(landmarks)     # Append shape (21, 3) array
-```
-
-**What appears on screen during recording:**
-- Status bar turns RED: `"RECORDING sample 1/5 — Perform your gesture!"`
-- A progress bar fills up at the bottom
-- A blinking red dot appears in the top-right corner (like a camera recording indicator)
-- A frame counter shows: `"Frames captured: 74"`
-
-**What if your hand disappears during recording?**
-- That frame is simply skipped (not added to `recorded_frames`)
-- A warning appears: `"! Hand lost — keep your hand visible !"`
-- The recording timer keeps ticking — you don't get extra time
-
-### 5c. Recording Complete — Validation
-
-After 3 seconds (`RECORDING_DURATION_SEC = 3`):
-
-```python
-if len(recorded_frames) < 10:
-    print(f"  [FAIL] Sample 1: too few frames (7). Retrying...")
-    recorded_frames = []
-    # Loop continues — you're asked to try again
-else:
-    raw = np.array(recorded_frames)              # Shape: (N, 21, 3), e.g., (74, 21, 3)
-    normalized = normalize_gesture(raw, 60)       # Shape: (60, 21, 3)
-    print(f"  [OK] Sample 1/5: captured 74 frames")
-    return normalized
-```
-
-> [!WARNING]
-> **The 10-frame minimum is critical.** If you keep your hand out of frame for most of the 3 seconds, you might only capture 5-6 frames. That's not enough data to represent a gesture — the temporal interpolation would produce garbage. So the system rejects it and asks you to try again.
-
-### 5d. What Does a Raw Frame Look Like?
-
-When MediaPipe processes a frame, it gives us 21 3D landmarks. `extract_landmarks()` in [landmarks.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/utils/landmarks.py) converts these to a NumPy array:
-
-```python
-landmarks = np.array(
-    [[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark],
-    dtype=np.float64
-)   # Shape: (21, 3)
-```
-
-A single raw frame for user "saimani" might look like:
-
-```
-Landmark  0 (WRIST):       [0.452, 0.823, 0.000]
-Landmark  1 (THUMB_CMC):   [0.441, 0.763, -0.024]
-Landmark  2 (THUMB_MCP):   [0.418, 0.705, -0.033]
-Landmark  3 (THUMB_IP):    [0.390, 0.668, -0.041]
-Landmark  4 (THUMB_TIP):   [0.362, 0.641, -0.048]
-Landmark  5 (INDEX_MCP):   [0.421, 0.681, -0.012]
-Landmark  6 (INDEX_PIP):   [0.410, 0.568, -0.031]
-Landmark  7 (INDEX_DIP):   [0.404, 0.478, -0.058]
-Landmark  8 (INDEX_TIP):   [0.401, 0.412, -0.089]
-Landmark  9 (MIDDLE_MCP):  [0.445, 0.673, -0.008]
-Landmark 10 (MIDDLE_PIP):  [0.442, 0.554, -0.029]
-Landmark 11 (MIDDLE_DIP):  [0.441, 0.462, -0.061]
-Landmark 12 (MIDDLE_TIP):  [0.440, 0.399, -0.081]
-...
-Landmark 20 (PINKY_TIP):   [0.513, 0.523, -0.061]
-```
-
-Over 3 seconds at ~25 FPS, you accumulate roughly **74 frames** of these arrays.
+If an arm jerk or hesitation occurred during Sample 4, the Quality Gate intercepts it, prints an on-screen warning, and asks for a re-recording. This prevents corrupted data from inflating the security thresholds.
 
 ---
 
-## 6. Step 4: Spatial Normalization — Per Frame {#6-step-4}
+## 11. Step 8: MAD-Based Robust Threshold Calibration {#11-step-8}
 
-**Function:** `normalize_spatial()` in [normalize.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/utils/normalize.py)
+Standard deviation is vulnerable on small sample sizes (10 pairwise distances). A single slightly loose sample skews $\sigma$.
 
-**Purpose:** Make the gesture look the same regardless of where the hand is positioned in the camera frame and how far it is from the camera.
-
-### Step 4a: Translation — Center on Wrist
-
-Every landmark's coordinates are shifted so the wrist becomes `[0, 0, 0]`:
+WaveLock uses **Median Absolute Deviation (MAD)**:
 
 ```python
-wrist = normalized[0].copy()    # e.g., [0.452, 0.823, 0.000]
-normalized -= wrist             # Subtract from ALL 21 landmarks
+distances = [d(s1,s2), d(s1,s3), ..., d(s4,s5)]  # 10 values
+
+# Compute robust statistics
+median_dist = np.median(distances)
+mad = np.median(np.abs(distances - median_dist))
+robust_std = 1.4826 * mad  # Asymptotically normal standard deviation estimate
+
+# Threshold candidate
+robust_candidate = median_dist + (2.5 * robust_std)
+percentile_candidate = np.percentile(distances, 90) * 1.15
+max_margin = np.max(distances) * 1.25
+
+# Select optimal threshold with security floor
+threshold = min(max(robust_candidate, percentile_candidate), max_margin)
+threshold = max(2.0, threshold)  # MIN_THRESHOLD floor = 2.0
 ```
 
-**Concrete worked example:**
-
-| Landmark | Raw Value | After Translation |
-|----------|-----------|-------------------|
-| 0 WRIST | [0.452, 0.823, 0.000] | **[0.000, 0.000, 0.000]** |
-| 4 THUMB_TIP | [0.362, 0.641, -0.048] | [-0.090, -0.182, -0.048] |
-| 8 INDEX_TIP | [0.401, 0.412, -0.089] | [-0.051, -0.411, -0.089] |
-| 12 MIDDLE_TIP | [0.440, 0.399, -0.081] | [-0.012, -0.424, -0.081] |
-| 16 RING_TIP | [0.476, 0.457, -0.073] | [0.024, -0.366, -0.073] |
-| 20 PINKY_TIP | [0.513, 0.523, -0.061] | [0.061, -0.300, -0.061] |
-
-> [!NOTE]
-> **Why do this?** Imagine you perform your gesture in the center of the frame — wrist at (0.5, 0.5). Then you perform the exact same gesture but shifted to the right — wrist at (0.8, 0.5). Without translation, the coordinate values would be completely different even though the gesture is identical. By centering on the wrist, the gesture becomes **position-invariant**.
-
-### Step 4b: Scaling — Normalize to Unit Sphere
-
-Divide ALL coordinates by the maximum distance from the wrist:
-
-```python
-distances_from_wrist = np.linalg.norm(normalized, axis=1)
-max_distance = np.max(distances_from_wrist)    # e.g., 0.424
-if max_distance > 1e-6:
-    normalized /= max_distance
-```
-
-**Continuing the example (max distance = 0.424 from MIDDLE_TIP):**
-
-| Landmark | After Translation | After Scaling (÷ 0.424) |
-|----------|-------------------|--------------------------|
-| 0 WRIST | [0.000, 0.000, 0.000] | [0.000, 0.000, 0.000] |
-| 8 INDEX_TIP | [-0.051, -0.411, -0.089] | [-0.120, -0.969, -0.210] |
-| 12 MIDDLE_TIP | [-0.012, -0.424, -0.081] | [-0.028, -1.000, -0.191] |
-| 20 PINKY_TIP | [0.061, -0.300, -0.061] | [0.144, -0.708, -0.144] |
-
-Now the furthest landmark (MIDDLE_TIP) is at distance exactly 1.0 from the wrist, and all other landmarks are proportionally placed within that unit sphere.
-
-> [!NOTE]
-> **Why do this?** If you sit 50cm from the camera, your hand fills more of the frame than at 80cm. MediaPipe returns larger x,y values for the closer hand. Without scaling, the same gesture at two distances looks different. By scaling to a unit sphere, the gesture becomes **size/distance-invariant**.
-
-After spatial normalization, one frame goes from raw `(21, 3)` to normalized `(21, 3)` — same shape, different values.
+### Calibrating the Remaining Gates:
+- **Finger State Threshold**: $	ext{clamp}(	ext{max\_mismatch} + 0.08, 0.12, 0.30)$
+- **Transition Order Threshold**: $	ext{clamp}(	ext{max\_dissim} + 0.08, 0.10, 0.40)$
+- **Segment Max Threshold**: $	ext{clamp}(	ext{max\_seg\_mismatch} + 0.10, 0.12, 0.50)$
 
 ---
 
-## 7. Step 5: Temporal Normalization — Across Frames {#7-step-5}
+## 12. Step 9: Cohort-Based Negative Sampling (6 Synthetic Impostors) {#12-step-9}
 
-**Function:** `normalize_temporal()` in [normalize.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/utils/normalize.py)
+Before saving, WaveLock generates a cohort of 6 synthetic impostor gestures from `cohort_library.py`:
+1. Static open hand
+2. Static fist
+3. All-fingers waving
+4. Sequential forward wave
+5. Sequential backward wave
+6. Random finger flutter
 
-**Purpose:** Make all gestures have exactly the same number of frames, regardless of how fast or slow you performed them.
+It computes the **Impostor Separation Ratio**:
+$$	ext{Ratio} = rac{\min(	ext{DTW}_{	ext{impostor}})}{\max(	ext{DTW}_{	ext{intra}})}$$
 
-### The Problem
-
-- Recording 1: You perform the gesture quickly → 68 frames captured
-- Recording 2: You perform it slowly → 82 frames captured
-- Recording 3: Frame drops on your webcam → 55 frames captured
-
-You can't compare frame 30 of a 68-frame gesture with frame 30 of an 82-frame gesture — they represent different points in the gesture timeline.
-
-### The Solution: Resample to 60 Frames via Linear Interpolation
-
-```python
-# Flatten spatial: (N, 21, 3) → (N, 63)
-flat_sequence = gesture_sequence.reshape(n_frames, 63)
-
-# Create time indices
-original_t = np.linspace(0.0, 1.0, n_frames)   # e.g., 74 points from 0.0 to 1.0
-target_t   = np.linspace(0.0, 1.0, 60)          # 60 points from 0.0 to 1.0
-
-# Interpolate each of the 63 features along time
-interpolator = interp1d(original_t, flat_sequence, axis=0, kind='linear')
-resampled = interpolator(target_t)   # Shape: (60, 63)
-
-# Unflatten: (60, 63) → (60, 21, 3)
-```
-
-### Concrete Worked Example (Simplified to 4→3 frames)
-
-Suppose we recorded 4 frames and need 3. For the INDEX_TIP x-coordinate:
-
-```
-Original (4 frames):
-  Time indices:  0.000    0.333    0.667    1.000
-  Values:        0.10     0.30     0.70     0.90
-
-Resampled (3 frames):
-  Time indices:  0.000    0.500    1.000
-  Values:        0.10     0.50     0.90
-```
-
-For frame at time 0.500, linear interpolation between the surrounding original frames:
-- Left neighbor: (0.333, 0.30)
-- Right neighbor: (0.667, 0.70)
-- Fraction: (0.500 - 0.333) / (0.667 - 0.333) = 0.500
-- Interpolated: 0.30 + 0.500 × (0.70 - 0.30) = **0.50**
-
-This happens for ALL 63 features (21 landmarks × 3 coordinates) independently.
-
-### Realistic Example (74→60 frames)
-
-```
-Sample 1: Recorded 74 frames in 3 seconds
-  Original time indices: [0.000, 0.014, 0.027, ..., 0.986, 1.000]  (74 points)
-  Target time indices:   [0.000, 0.017, 0.034, ..., 0.983, 1.000]  (60 points)
-
-For each target time, the system finds the two closest original frames
-and linearly blends between them. The result:
-
-  Input:  (74, 21, 3) — variable frame count
-  Output: (60, 21, 3) — fixed frame count ← always this shape
-```
-
-> [!IMPORTANT]
-> After normalization, **every** gesture in the system — whether recorded, saved as a template, or captured live for authentication — is exactly `(60, 21, 3)`. This is critical. DTW comparison requires the data to be in a consistent format.
+- **If Ratio $\ge 1.50	imes$**: `✓ Gesture is unique!`
+- **If Ratio $< 1.50	imes$**: `⚠ WARNING: Gesture too simple or common. Consider a more dynamic gesture.`
 
 ---
 
-## 8. Step 6: Threshold Calibration — The Brain of the System {#8-step-6}
+## 13. Step 10: Saving to Disk & Template Preservation {#13-step-10}
 
-This is the most important step. After recording 5 samples, the system computes **4 personalized security thresholds** by analyzing how similar your own performances are to each other.
-
-### 8a. Pairwise DTW Distances
-
-The function `compute_threshold_from_samples()` in [gesture_compare.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/gesture_compare.py) computes the DTW distance between every pair of your 5 samples.
-
-With 5 samples, there are $C(5,2) = 10$ pairs:
-
-```
-compute_pairwise_distances(samples):
-    for i in range(5):
-        for j in range(i+1, 5):
-            distances.append( DTW(sample_i, sample_j) )
-```
-
-**Real data from user "saimani":**
-
-| Pair | Samples | DTW Distance |
-|------|---------|-------------|
-| 1 | Sample 1 vs Sample 2 | 1.2451 |
-| 2 | Sample 1 vs Sample 3 | 2.0049 |
-| 3 | Sample 1 vs Sample 4 | 1.2393 |
-| 4 | Sample 1 vs Sample 5 | 1.3030 |
-| 5 | Sample 2 vs Sample 3 | 2.0380 |
-| 6 | Sample 2 vs Sample 4 | 1.2710 |
-| 7 | Sample 2 vs Sample 5 | 1.1028 |
-| 8 | Sample 3 vs Sample 4 | 1.5378 |
-| 9 | Sample 3 vs Sample 5 | 1.6516 |
-| 10 | Sample 4 vs Sample 5 | 0.8738 |
-
-These 10 numbers describe saimani's **natural variation**. Samples 4 and 5 are most similar (0.87), while samples 2 and 3 are most different (2.04).
-
-### 8b. Gate 1 Threshold: DTW Distance (Statistical v2)
-
-The threshold is computed using a statistical method in `compute_threshold_details()`:
+`save_registration()` writes the finalized template files:
 
 ```python
-# Step 1: Compute statistics
-mean = 1.4267         # Average distance across 10 pairs
-std  = 0.3590         # Standard deviation
-P90  = 2.0082         # 90th percentile distance
-max  = 2.0380         # Maximum distance (worst pair)
-
-# Step 2: Compute three candidates
-statistical = mean + (2.0 × std) = 1.4267 + 0.7180 = 2.1448
-percentile  = P90 × 1.15         = 2.0082 × 1.15   = 2.3094
-max_margin  = max × 1.25         = 2.0380 × 1.25   = 2.5475
-
-# Step 3: Select the threshold
-candidate = min(
-    max(statistical, percentile),    # max(2.1448, 2.3094) = 2.3094
-    max_margin,                       # 2.5475
-    legacy_cap                        # max × 1.5 = 3.0570
-)
-# candidate = min(2.3094, 2.5475, 3.0570) = 2.3094
-
-# Step 4: Apply floor
-threshold = max(2.0, 2.3094) = 2.3094
-```
-
-**Result: `threshold = 2.3094`**
-
-> [!NOTE]
-> **What does this number mean?** Any live gesture with a DTW distance ≤ 2.31 from at least one stored template will pass Gate 1. Since saimani's own samples vary up to 2.04, setting the threshold at 2.31 gives a comfortable margin (0.27) for natural variation while keeping out gestures that are genuinely different.
-
-### 8c. Gate 2 Threshold: Finger State Average Mismatch
-
-`compute_finger_state_threshold_details()` computes how often the same fingers are extended across all pairs:
-
-```python
-# Real data for saimani:
-pairwise_mismatches = [0.0567, 0.07, 0.0333, 0.1367, 0.0467,
-                       0.0367, 0.1067, 0.0767, 0.12, 0.1433]
-
-max_mismatch = 0.1433    # Worst pair: 14.33% of frames differ
-
-threshold = max(0.12, 0.1433 + 0.08) = max(0.12, 0.2233) = 0.2233
-threshold = min(0.30, 0.2233) = 0.2233
-```
-
-**Result: `finger_state_threshold = 0.2233`**
-
-### 8d. Gate 3 Threshold: Finger Transition Order
-
-`compute_transition_threshold_details()` computes edit distances between transition sequences:
-
-```python
-# After comparing finger raise/drop sequences across all 10 pairs:
-max_dissimilarity = (the worst pair's normalized edit distance)
-
-threshold = max(0.10, max_dissimilarity + 0.08)
-threshold = min(0.40, threshold)
-```
-
-### 8e. Gate 4 Threshold: Segment Max Mismatch
-
-`compute_segment_threshold_details()` divides each gesture into 6 segments and computes the worst-segment mismatch:
-
-```python
-max_max_mismatch = (the worst segment mismatch across all 10 pairs)
-
-threshold = max(0.12, max_max_mismatch + 0.10)
-threshold = min(0.50, threshold)
-```
-
-### 8f. Consistency Score
-
-The system also computes a **consistency score** (0–100) that measures how consistently you performed the gesture:
-
-```python
-consistency_score = 100 × (1 - std/mean)
-                  = 100 × (1 - 0.359/1.427)
-                  = 100 × 0.7483
-                  = 74.83
-```
-
-**Interpretation:**
-- **90–100**: Very consistent performer, tight thresholds, high security
-- **70–89**: Good consistency (saimani is here at 74.83)
-- **50–69**: Moderate variation, looser thresholds
-- **Below 50**: Very inconsistent, thresholds become wide
-
-### Terminal Output After Calibration
-
-```
-  Computing optimal threshold from your samples...
-
-  Pairwise distances between your recordings:
-    Sample 1 vs Sample 2: 1.2451
-    Sample 1 vs Sample 3: 2.0049
-    Sample 1 vs Sample 4: 1.2393
-    Sample 1 vs Sample 5: 1.3030
-    Sample 2 vs Sample 3: 2.0380
-    Sample 2 vs Sample 4: 1.2710
-    Sample 2 vs Sample 5: 1.1028
-    Sample 3 vs Sample 4: 1.5378
-    Sample 3 vs Sample 5: 1.6516
-    Sample 4 vs Sample 5: 0.8738
-  Max variation:     2.0380
-  Consistency score: 74.8/100
-  Threshold method:  statistical_v2
-  Computed threshold:      2.3094
-  Finger mismatch limit:   0.2233
-  Transition order limit:  0.3657
-  Segment mismatch limit:  0.3800
-```
-
----
-
-## 9. Step 7: Saving to Disk {#9-step-7}
-
-`save_registration()` in [gesture_compare.py](file:///c:/Users/asus/Desktop/final%20year%20-%20Copy/gesture_auth_project/gesture_compare.py#L1066-L1194) creates everything:
-
-### 9a. Create Directory
-
-```python
-user_dir = os.path.join(TEMPLATES_DIR, username)    # templates/saimani/
+user_dir = os.path.join(TEMPLATES_DIR, username)
 os.makedirs(user_dir, exist_ok=True)
-```
 
-### 9b. Clean Old Files (Re-registration)
-
-If the user already exists, all old files are deleted first:
-```python
+# 1. Clean old gesture files while STRICTLY PRESERVING face_embedding.npy
 for old_file in os.listdir(user_dir):
-    os.remove(os.path.join(user_dir, old_file))
+    if old_file != "face_embedding.npy":
+        os.remove(os.path.join(user_dir, old_file))
+
+# 2. Save the 5 normalized gesture templates
+for i, sample in enumerate(samples, start=1):
+    np.save(os.path.join(user_dir, f"gesture_{i}.npy"), sample)
+
+# 3. Save config.json
+with open(os.path.join(user_dir, "config.json"), "w") as f:
+    json.dump(config, f, indent=2)
+
+# 4. Anchor face_embedding.npy
+if face_emb_result is not None:
+    save_face_embedding(username, face_emb_result, TEMPLATES_DIR)
 ```
 
-### 9c. Save Each Sample as .npy
+### Biometric Profile Calibration
+
+Between the quality gate and disk save, the system builds intrinsic physical signatures:
 
 ```python
-for i, sample in enumerate(samples, start=1):
-    filepath = os.path.join(user_dir, f"gesture_{i}.npy")
-    np.save(filepath, sample)   # Saves (60, 21, 3) array
+# ── Biometric Identity Profile (Anti-Shoulder-Surfing) ──
+anthro_profile = calibrate_anthropometric_profile(samples)
+kinematic_profile = calibrate_kinematic_profile(samples)
 ```
 
-This creates:
-```
-templates/saimani/gesture_1.npy   →  (60, 21, 3) float64
-templates/saimani/gesture_2.npy   →  (60, 21, 3) float64
-templates/saimani/gesture_3.npy   →  (60, 21, 3) float64
-templates/saimani/gesture_4.npy   →  (60, 21, 3) float64
-templates/saimani/gesture_5.npy   →  (60, 21, 3) float64
-```
-
-Each `.npy` file is approximately **28.9 KB** (60 × 21 × 3 × 8 bytes for float64).
-
-### 9d. Save config.json
-
-All 4 thresholds, plus calibration metadata for debugging and analysis:
-
-```json
-{
-  "threshold": 2.3094,
-  "num_samples": 5,
-  "threshold_method": "statistical_v2",
-  "finger_state_threshold": 0.2233,
-  "finger_state_method": "finger_state_sequence_v1",
-  "finger_state_pairwise_mismatches": [0.0567, 0.07, ...],
-  "pairwise_distances": [1.2451, 2.0049, ...],
-  "mean_pairwise_distance": 1.4267,
-  "std_pairwise_distance": 0.359,
-  "consistency_score": 74.83,
-  "transition_threshold": 0.3657,
-  "transition_method": "transition_edit_distance_v1",
-  "segment_threshold": 0.38,
-  "segment_method": "segment_max_mismatch_v1",
-  "segment_count": 6,
-  ...
-}
-```
-
-### 9e. Final Output
-
-```
-  ==================================================
-  REGISTRATION COMPLETE for 'saimani'!
-  ==================================================
-  Samples saved:  5
-  Threshold:      2.3094
-  Location:       .../templates/saimani
-
-  You can now authenticate with:
-    python gesture_auth.py
-```
+- `calibrate_anthropometric_profile(samples)` computes the 5-feature metacarpal_invariant_v2 baseline from all 5 templates. It extracts per-frame bone ratios using rigid palm landmarks, takes the median across frames per template, then averages across templates to produce a baseline vector, standard deviation, and auto-calibrated tolerance (`max_dev * 1.6`, capped at `DEFAULT_ANTHRO_TOLERANCE = 0.15`, floored at `MIN_ANTHRO_TOLERANCE = 0.12`).
+- `calibrate_kinematic_profile(samples)` extracts velocity profiles from fingertip landmarks (8, 12, 16, 20), bins them into 10 temporal phases normalized to sum to 1.0, computes mean jerk across templates, peak velocity phase, and max mid-gesture dwell. Tolerance is calibrated as `max(0.35, max_dev * 1.6)` capped at 0.55.
+- Both profiles are stored in `config.json` alongside the gesture thresholds.
 
 ---
 
-## 10. Step 8: What the Final Output Looks Like {#10-step-8}
+## 14. Complete End-to-End Walkthrough Trace {#14-step-11}
 
-After registration, the `templates/saimani/` folder contains:
-
-```
-templates/saimani/
-├── config.json       (2.1 KB)  ← All 4 thresholds + metadata
-├── gesture_1.npy     (28.9 KB) ← Normalized sample 1: (60, 21, 3)
-├── gesture_2.npy     (28.9 KB) ← Normalized sample 2: (60, 21, 3)
-├── gesture_3.npy     (28.9 KB) ← Normalized sample 3: (60, 21, 3)
-├── gesture_4.npy     (28.9 KB) ← Normalized sample 4: (60, 21, 3)
-└── gesture_5.npy     (28.9 KB) ← Normalized sample 5: (60, 21, 3)
-```
-
-**Total storage per user: ~147 KB**
-
----
-
-## 11. Complete Walkthrough: Registering "saimani" with Gesture "1-2-4-3" {#11-walkthrough}
-
-Here's the complete end-to-end story:
-
-### 11a. User runs the program
-```bash
-python gesture_capture.py
-```
-
-### 11b. Terminal interaction
-```
+```text
 ==========================================================
    GESTURE REGISTRATION — Biometric Auth System
 ==========================================================
-
-  Existing users: testing
+  Existing users: facetest, saimani
 
   Enter a username to register: saimani
 
   Registering: saimani
-  You will record your gesture 5 times.
-  Perform the SAME gesture each time for best accuracy.
+  Stage 1: Face Enrollment -> Stage 2: 5 Gesture Samples
 
   Opening webcam (index 0)...
   Webcam ready — resolution: 640x480
-```
 
-### 11c. Recording 5 samples
+  [Stage 1: Looking into camera...]
+  ✓ Face detected (98%)
+  Capturing high-fidelity face burst (5 frames)...
+  ✓ Face enrolled successfully! Saved to face_embedding.npy
 
-For each sample, saimani performs the gesture "1-2-4-3" (raise index → middle → ring → pinky in that order):
+  ============================================================
+    STEP 2 OF 2: Gesture Trajectory & Kinematic Enrollment
+    You will record your gesture 5 times.
+  ============================================================
 
-```
   --- Sample 1/5 --- Press [R] when ready ---
-  [REC] Sample 1: recording for 3 seconds...
-  [OK] Sample 1/5: captured 74 frames
-        Ready for sample 2/5.
+        ✓ Sample 1 (initial baseline)
 
   --- Sample 2/5 --- Press [R] when ready ---
-  [REC] Sample 2: recording for 3 seconds...
-  [OK] Sample 2/5: captured 78 frames
-        Ready for sample 3/5.
+        ✓ Sample 2 (initial baseline)
 
   --- Sample 3/5 --- Press [R] when ready ---
-  [REC] Sample 3: recording for 3 seconds...
-  [OK] Sample 3/5: captured 71 frames
-        Ready for sample 4/5.
+        ✓ Sample 3 Consistent with baseline
 
   --- Sample 4/5 --- Press [R] when ready ---
-  [REC] Sample 4: recording for 3 seconds...
-  [OK] Sample 4/5: captured 76 frames
-        Ready for sample 5/5.
+        ✗ Sample 4 had irregular motion. Let's re-record that one.
+  --- Sample 4/5 (Retry 1) --- Press [R] when ready ---
+        ✓ Sample 4 Consistent with baseline
 
   --- Sample 5/5 --- Press [R] when ready ---
-  [REC] Sample 5: recording for 3 seconds...
-  [OK] Sample 5/5: captured 80 frames
-```
+        ✓ Sample 5 Consistent with baseline
 
-Each raw recording (74, 78, 71, 76, 80 frames) is immediately normalized to (60, 21, 3).
-
-### 11d. Threshold calibration
-
-```
   Computing optimal threshold from your samples...
+  Checking gesture uniqueness against common patterns...
+  ✓ Gesture is unique! (impostor ratio: 18.42x)
 
-  Pairwise distances between your recordings:
-    Sample 1 vs Sample 2: 1.2451
-    Sample 1 vs Sample 3: 2.0049
-    Sample 1 vs Sample 4: 1.2393
-    Sample 1 vs Sample 5: 1.3030
-    Sample 2 vs Sample 3: 2.0380
-    Sample 2 vs Sample 4: 1.2710
-    Sample 2 vs Sample 5: 1.1028
-    Sample 3 vs Sample 4: 1.5378
-    Sample 3 vs Sample 5: 1.6516
-    Sample 4 vs Sample 5: 0.8738
-  Max variation:     2.0380
-  Consistency score: 74.8/100
-  Threshold method:  statistical_v2
-  Computed threshold:      2.3094
-  Finger mismatch limit:   0.2233
-  Transition order limit:  0.3657
-  Segment mismatch limit:  0.3800
-```
+  Hand bone aspect ratio:  0.5523 (tolerance: ±15%)
+  Kinematic jerk baseline: 0.00025
+  Biometric identity baseline calibrated (Anti-Shoulder-Surfing enabled).
 
-### 11e. Completion
-
-```
   ==================================================
   REGISTRATION COMPLETE for 'saimani'!
   ==================================================
   Samples saved:  5
   Threshold:      2.3094
-  Location:       .../templates/saimani
-
-  You can now authenticate with:
-    python gesture_auth.py
+  Face Profile:   ENROLLED (face_embedding.npy)
+  Location:       C:\Users\...\templates\saimani
 ```
 
 ---
 
-## 12. Quick Reference {#12-reference}
+## 15. Quick Reference & Disk Artifacts {#15-reference}
 
-### Key Constants
+| Disk Artifact | Shape / Size | Purpose |
+| :--- | :--- | :--- |
+| `face_embedding.npy` | `(128,)` float32 (~512 B) | Normalized master facial identity embedding vector on unit hypersphere. |
+| `gesture_1.npy` ... `gesture_5.npy` | `(60, 21, 3)` float64 (~28.9 KB each) | 5 spatially- and temporally-normalized gesture trajectory templates. |
+| `config.json` | JSON text (~2.6 KB) | MAD-calibrated thresholds, anthropometric hand geometry profile (`metacarpal_invariant_v2`), kinematic rhythm profile, inter-sample distances, and consistency scores. |
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `RECORDING_DURATION_SEC` | 3 seconds | Each recording window |
-| `TARGET_FRAMES` | 60 | Fixed frame count after normalization |
-| `NUM_REGISTRATION_SAMPLES` | 5 | Times to perform the gesture |
-| `MIN_THRESHOLD` | 2.0 | Floor for DTW threshold |
-| `THRESHOLD_STD_FACTOR` | 2.0 | Standard deviation multiplier |
-| `THRESHOLD_PERCENTILE` | 90 | Percentile used for calibration |
-| `FINGER_STATE_MARGIN` | 0.08 | Margin added to finger mismatch |
-| `TRANSITION_MARGIN` | 0.08 | Margin for transition order |
-| `SEGMENT_MARGIN` | 0.10 | Margin for segment max mismatch |
-| `SEGMENT_COUNT` | 6 | Segments per gesture |
+### Enrollment Commands
+- **Full Registration (Face + Gesture)**:
+  ```bash
+  python gesture_capture.py
+  ```
+- **Face-Only Quick Enrollment / Update**:
+  ```bash
+  python enroll_face.py --user <username>
+  ```
+- **Camera Selection**:
+  ```bash
+  # With specific camera
+  python gesture_capture.py --camera 1
+  python enroll_face.py --user <username> --camera 1
 
-### Files Created Per User
-
-| File | Shape/Size | Contents |
-|------|-----------|----------|
-| `gesture_1.npy` through `gesture_5.npy` | (60, 21, 3) float64, ~29 KB each | Normalized gesture templates |
-| `config.json` | ~2 KB | 4 thresholds + calibration metadata |
-
-### The Complete Data Transformation Pipeline
-
-```
-Raw MediaPipe output per frame:    (21, 3)    ← x,y in [0,1], z relative
-  ↓ Accumulate over 3 seconds
-Raw recording:                     (N, 21, 3)  ← N ≈ 70-80 frames
-  ↓ normalize_spatial() per frame
-Spatially normalized:              (N, 21, 3)  ← wrist at origin, unit sphere
-  ↓ normalize_temporal()
-Fully normalized:                  (60, 21, 3) ← fixed 60 frames
-  ↓ np.save()
-Saved template:                    gesture_K.npy
-```
+  # List available cameras
+  python gesture_capture.py --list-cams
+  ```
