@@ -99,12 +99,12 @@ def generate_distinct_hand_impostors(templates, count=30, seed=101):
         thumb_scale = rng.choice([0.80, 0.85, 1.15, 1.25])
         
         # Scale palm width: affects distance between p[5] and p[17]
-        # Move p[5] and p[17] laterally (x-axis) relative to p[9]
-        mid_x = base[:, 9, 0:1]  # reference x from middle MCP
+        # Move p[5] and p[17] in 3D relative to p[9]
+        mid_x = base[:, 9]  # reference from middle MCP
         for lm in [5, 6, 7, 8]:  # index finger chain
-            base[:, lm, 0:1] = mid_x + (base[:, lm, 0:1] - mid_x) * palm_width_scale
+            base[:, lm] = mid_x + (base[:, lm] - mid_x) * palm_width_scale
         for lm in [17, 18, 19, 20]:  # pinky finger chain
-            base[:, lm, 0:1] = mid_x + (base[:, lm, 0:1] - mid_x) * palm_width_scale
+            base[:, lm] = mid_x + (base[:, lm] - mid_x) * palm_width_scale
         
         # Scale finger lengths: affects phalanx spans (p[5]→p[8], etc.)
         # Extend/shorten fingers from their MCP joints
@@ -152,11 +152,11 @@ def generate_similar_hand_impostors(templates, count=30, seed=202):
         thumb_scale = rng.uniform(0.94, 1.06)
         
         # Same structural perturbation as distinct, but smaller magnitude
-        mid_x = base[:, 9, 0:1]
+        mid_x = base[:, 9]
         for lm in [5, 6, 7, 8]:
-            base[:, lm, 0:1] = mid_x + (base[:, lm, 0:1] - mid_x) * palm_width_scale
+            base[:, lm] = mid_x + (base[:, lm] - mid_x) * palm_width_scale
         for lm in [17, 18, 19, 20]:
-            base[:, lm, 0:1] = mid_x + (base[:, lm, 0:1] - mid_x) * palm_width_scale
+            base[:, lm] = mid_x + (base[:, lm] - mid_x) * palm_width_scale
         
         for finger_chain in [(5,6,7,8), (9,10,11,12), (13,14,15,16), (17,18,19,20)]:
             mcp = finger_chain[0]
@@ -171,6 +171,10 @@ def generate_similar_hand_impostors(templates, count=30, seed=202):
         dwell_len = rng.randint(6, 12)
         dwell_end = min(base.shape[0] - 5, dwell_start + dwell_len)
         base[dwell_start:dwell_end] = base[dwell_start]
+        
+        # Add slight execution noise
+        noise = rng.normal(0, 0.005, base.shape)
+        base += noise
         
         # Re-normalize
         for f in range(base.shape[0]):
@@ -195,11 +199,11 @@ def generate_jerky_kinematic_impostors(templates, count=30, seed=303):
         palm_width_scale = rng.uniform(0.88, 1.12)
         finger_length_scale = rng.uniform(0.90, 1.10)
         
-        mid_x = base[:, 9, 0:1]
+        mid_x = base[:, 9]
         for lm in [5, 6, 7, 8]:
-            base[:, lm, 0:1] = mid_x + (base[:, lm, 0:1] - mid_x) * palm_width_scale
+            base[:, lm] = mid_x + (base[:, lm] - mid_x) * palm_width_scale
         for lm in [17, 18, 19, 20]:
-            base[:, lm, 0:1] = mid_x + (base[:, lm, 0:1] - mid_x) * palm_width_scale
+            base[:, lm] = mid_x + (base[:, lm] - mid_x) * palm_width_scale
         
         for finger_chain in [(5,6,7,8), (9,10,11,12), (13,14,15,16), (17,18,19,20)]:
             mcp = finger_chain[0]
@@ -208,11 +212,22 @@ def generate_jerky_kinematic_impostors(templates, count=30, seed=303):
         
         # Introduce motor hesitation / jerky stepwise transitions
         n = base.shape[0]
-        for f in range(1, n):
-            if f % 4 == 0:
-                base[f] = base[f-1]  # sudden freeze / stutter
-            elif f % 6 == 0:
-                base[f] = base[min(n-1, f+2)]  # sudden jump
+        f = 1
+        while f < n:
+            if f % 5 == 0:
+                freeze_len = rng.randint(2, 5)
+                for i in range(min(n - f, freeze_len)):
+                    base[f + i] = base[f - 1]
+                f += freeze_len
+            elif f % 8 == 0:
+                base[f] = base[min(n - 1, f + 3)]
+                f += 1
+            else:
+                f += 1
+        
+        # Add execution noise (hesitant users are jittery)
+        noise = rng.normal(0, 0.007, base.shape)
+        base += noise
         
         # Re-normalize
         for f in range(base.shape[0]):

@@ -1041,8 +1041,8 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
                               segment_threshold=None,
                               anthropometric_profile=None,
                               kinematic_profile=None,
-                              face_match=True,
-                              face_confidence=1.0,
+                              face_match=None,
+                              face_confidence=0.0,
                               face_details=None):
     """
     Authenticate a live gesture against stored templates using Score Fusion
