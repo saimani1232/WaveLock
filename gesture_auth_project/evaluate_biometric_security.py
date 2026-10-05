@@ -20,20 +20,72 @@ Root causes fixed from original evaluate_biometric_security.py:
 """
 
 import sys
+import argparse
+from collections import Counter
+
 import numpy as np
 from scipy.interpolate import interp1d
 
 from gesture_compare import (
+    TEMPLATES_DIR,
+    list_registered_users,
+    normalize_username,
     load_all_user_templates,
     load_user_threshold,
     load_user_finger_state_threshold,
     load_user_transition_threshold,
     load_user_segment_threshold,
     load_user_anthropometric_profile,
-    load_user_kinematic_profile,
     authenticate_with_details,
 )
+from utils.kinematics import calibrate_kinematic_profile
 from cohort_library import generate_cohort_library
+
+
+def load_benchmark_user(argv=None, description=""):
+    """
+    Parse --user / --templates-dir and load the pose-only profile used by the
+    synthetic benchmarks. Exits with a clear message when no user exists.
+
+    The synthetic cohorts perturb the 60-frame pose templates, so there are
+    no raw recordings for them: the kinematic baseline is calibrated from
+    the pose templates (legacy method) and the wrist-path gate is not
+    exercised, whatever the user's live profile uses.
+    """
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--user", "-u", default=None,
+                        help="Registered user to benchmark (default: first registered)")
+    parser.add_argument("--templates-dir", default=TEMPLATES_DIR,
+                        help="Templates root directory")
+    args = parser.parse_args(argv)
+
+    registered = list_registered_users(args.templates_dir)
+    if not registered:
+        print(f"No registered users found in {args.templates_dir}. "
+              f"Register one with gesture_capture.py first.")
+        sys.exit(1)
+    try:
+        username = normalize_username(args.user) if args.user else registered[0]
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    if username not in registered:
+        print(f"ERROR: user '{username}' is not registered "
+              f"(registered: {', '.join(registered)}).")
+        sys.exit(1)
+
+    d = args.templates_dir
+    templates = load_all_user_templates(username, d)
+    return {
+        "username": username,
+        "templates": templates,
+        "threshold": load_user_threshold(username, d),
+        "fst": load_user_finger_state_threshold(username, d),
+        "tt": load_user_transition_threshold(username, d),
+        "st": load_user_segment_threshold(username, d),
+        "anthro_prof": load_user_anthropometric_profile(username, templates, d),
+        "kin_prof": calibrate_kinematic_profile(templates),
+    }
 
 
 def generate_genuine_variations(templates, count=30, seed=42):
@@ -254,10 +306,9 @@ def evaluate_trial(live, templates, threshold, fst, tt, st, anthro_prof, kin_pro
         face_match=None, face_confidence=0.0
     )
     
-    # Check Macro Gates Only: transition gate passes and fused_score >= 0.55
-    best_comp = details["comparisons"][best_idx]
-    macro_passed = (best_comp["passes_transition"] and 
-                    best_comp["fused_score"] >= details["fusion_acceptance_threshold"])
+    # Macro gates only: the same per-template gate decision the live system
+    # uses (transition + DTW + finger/segment + fused score).
+    macro_passed = details["passes_macro"]
     
     # Check Macro + Hand Anatomy Only
     macro_plus_anthro = macro_passed and details["anthropometric_match"]
@@ -283,14 +334,12 @@ def main():
     print("  WAVELOCK BIOMETRIC SECURITY BENCHMARK (CORRECTED)")
     print("=" * 70)
     
-    username = "saimani"
-    templates = load_all_user_templates(username)
-    threshold = load_user_threshold(username)
-    fst = load_user_finger_state_threshold(username)
-    tt = load_user_transition_threshold(username)
-    st = load_user_segment_threshold(username)
-    anthro_prof = load_user_anthropometric_profile(username, templates)
-    kin_prof = load_user_kinematic_profile(username, templates)
+    user = load_benchmark_user(description="WaveLock gesture-only synthetic benchmark")
+    username, templates = user["username"], user["templates"]
+    threshold, fst, tt, st = user["threshold"], user["fst"], user["tt"], user["st"]
+    anthro_prof, kin_prof = user["anthro_prof"], user["kin_prof"]
+    print("NOTE: all cohorts are synthetic perturbations of the enrolled templates;")
+    print("      the wrist-path gate is not exercised. Validate with real users.")
     
     print(f"Target User: '{username}' ({len(templates)} templates)")
     print(f"Calibrated Tolerances: Hand Anatomy = +/-{anthro_prof['tolerance']:.1%}, "
@@ -398,7 +447,6 @@ def main():
     print("\n  Common failure reasons per impostor cohort:")
     for name, data in results_by_cohort.items():
         if not name.startswith("1."):
-            from collections import Counter
             reason_counts = Counter(data["common_reasons"])
             print(f"    {name}: {dict(reason_counts)}")
 

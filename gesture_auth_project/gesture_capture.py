@@ -1,18 +1,19 @@
 """
 Gesture Capture — Biometric Authentication System
 
-Registers a user's gesture by recording it multiple times (3 samples
-by default) to capture natural variation. Automatically computes a
-calibrated DTW threshold from the samples for reliable authentication.
+Registers a user's face (optional) and gesture, recording the gesture
+multiple times (5 samples) to capture natural variation. Automatically
+computes calibrated thresholds from the samples for reliable authentication.
 
 Usage:
-    python gesture_capture.py
+    python gesture_capture.py [--user NAME] [--camera N]
 
 Flow:
     1. Enter a username
-    2. Record your gesture 3 times (the system guides you through each)
-    3. System auto-computes your personal threshold
-    4. Registration saved — ready for authentication
+    2. Capture the face (or skip)
+    3. Record your gesture 5 times (the system guides you through each)
+    4. System auto-computes your personal thresholds
+    5. Registration saved atomically — ready for authentication
 
 Controls:
     R  — Start recording the current sample
@@ -23,7 +24,6 @@ Requirements:
 """
 
 import os
-import sys
 import time
 
 import cv2
@@ -39,8 +39,11 @@ from gesture_compare import (
     compute_segment_threshold_details,
     compute_threshold_from_samples,
     compute_threshold_details,
+    extract_finger_transitions,
+    normalize_username,
     save_registration,
     list_registered_users,
+    _read_config,
     NUM_REGISTRATION_SAMPLES,
     OUTLIER_REJECTION_FACTOR,
 )
@@ -48,12 +51,9 @@ from cohort_library import (
     generate_cohort_library,
     validate_gesture_uniqueness,
 )
-from utils.anthropometrics import calibrate_anthropometric_profile
-from utils.kinematics import calibrate_kinematic_profile
 from utils.face_auth import (
     detect_primary_face,
     extract_face_embedding,
-    save_face_embedding,
 )
 from utils.camera_utils import (
     open_camera,
@@ -67,6 +67,7 @@ from utils.camera_utils import (
 
 RECORDING_DURATION_SEC = 3    # Duration of each gesture recording
 TARGET_FRAMES = 60            # Frames after temporal normalization
+MIN_RECORDED_FRAMES = 10      # Fewer hand frames than this = failed recording
 
 # Resolve paths relative to this script's location
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -231,8 +232,11 @@ def record_one_sample(cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
         username: str, the username being registered.
 
     Returns:
-        numpy array of shape (TARGET_FRAMES, 21, 3) — the normalized sample.
-        Returns None if the user quit or the recording failed.
+        tuple (pose, raw, frame_aspect):
+            pose: (TARGET_FRAMES, 21, 3) normalised sample,
+            raw: (N, 21, 3) raw MediaPipe landmarks as recorded,
+            frame_aspect: frame width / height.
+        Returns None if the user quit or the camera failed.
     """
     is_recording = False
     recording_start_time = 0.0
@@ -295,18 +299,19 @@ def record_one_sample(cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
             if elapsed >= RECORDING_DURATION_SEC:
                 is_recording = False
 
-                if len(recorded_frames) < 10:
+                if len(recorded_frames) < MIN_RECORDED_FRAMES:
                     print(f"  [FAIL] Sample {sample_num}: too few frames "
                           f"({len(recorded_frames)}). Retrying...")
                     recorded_frames = []
                     continue
                 else:
-                    # Normalize and return
-                    raw = np.array(recorded_frames)
+                    # Normalize and return (raw kept for path + kinematics)
+                    raw = np.array(recorded_frames, dtype=np.float64)
                     normalized = normalize_gesture(raw, TARGET_FRAMES)
+                    h, w = frame.shape[:2]
                     print(f"  [OK] Sample {sample_num}/{total_samples}: "
                           f"captured {len(recorded_frames)} frames")
-                    return normalized
+                    return normalized, raw, w / h
 
         else:
             # ─── Idle Mode — waiting for [R] ─────────────────────────
@@ -410,8 +415,15 @@ def validate_sample_quality(new_sample, accepted_samples):
 
 def capture_face_enrollment_phase(cap, username):
     """
-    Stage 1: Enroll user's face embedding to anchor multimodal identity.
+    Stage 1: Capture the user's face embedding to anchor multimodal identity.
     User looks at camera and presses [SPACE] to capture, or [S] to skip.
+
+    Nothing is written to disk here: the embedding is saved together with the
+    gesture templates by save_registration(), so cancelling mid-registration
+    can never leave a new face paired with an old gesture profile.
+
+    Returns:
+        numpy (128,) embedding, None if skipped, False if cancelled/failed.
     """
     print()
     print("  ============================================================")
@@ -475,13 +487,18 @@ def capture_face_enrollment_phase(cap, username):
 
             if len(captured_embs) >= REQUIRED_FRAMES:
                 master = np.mean(captured_embs, axis=0)
-                master /= np.linalg.norm(master)
-                save_path = save_face_embedding(username, master, TEMPLATES_DIR)
-                print(f"    ✓ Face enrolled successfully! Saved to {os.path.basename(save_path)}")
+                norm = np.linalg.norm(master)
+                if norm < 1e-8:
+                    print("  [FAIL] Face capture produced an invalid embedding. Try again.")
+                    captured_embs = []
+                    enrolling = False
+                    continue
+                master = master / norm
+                print("    ✓ Face captured. It will be saved when registration completes.")
 
                 cv2.rectangle(display, (0, h // 2 - 35), (w, h // 2 + 35), (0, 180, 0), -1)
                 cv2.putText(
-                    display, "FACE ENROLLED SUCCESSFULLY!", (w // 2 - 180, h // 2 + 10),
+                    display, "FACE CAPTURED SUCCESSFULLY!", (w // 2 - 180, h // 2 + 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA
                 )
                 cv2.imshow(WINDOW_NAME, display)
@@ -533,16 +550,14 @@ def main():
         print(f"  Existing users: {', '.join(existing_users)}")
     print()
     raw_user = args.opt_user or args.user
-    if raw_user:
-        username = raw_user.strip()
-    else:
-        username = input("  Enter a username to register: ").strip()
+    if not raw_user:
+        raw_user = input("  Enter a username to register: ")
 
-    if not username:
-        print("  No username entered. Exiting.")
+    try:
+        username = normalize_username(raw_user)
+    except ValueError as e:
+        print(f"  {e}")
         return
-
-    username = username.lower().replace(" ", "_")
 
     if username in existing_users:
         overwrite = input(
@@ -560,28 +575,27 @@ def main():
 
     # ─── Setup ────────────────────────────────────────────────────────
     hands, mp_hands, mp_drawing, mp_drawing_styles = setup_mediapipe()
-    cap = setup_camera(camera_index=args.camera)
-    print()
-
-    # ─── Stage 1: Face Enrollment ─────────────────────────────────────
-    face_emb_result = capture_face_enrollment_phase(cap, username)
-    if face_emb_result is False:
-        cap.release()
-        cv2.destroyAllWindows()
-        return
-
-    print()
-    print("  ============================================================")
-    print("    STEP 2 OF 2: Gesture Trajectory & Kinematic Enrollment")
-    print(f"    You will record your gesture {NUM_REGISTRATION_SAMPLES} times.")
-    print("  ============================================================")
-    print()
-
-    # ─── Record multiple samples (with quality gate) ─────────────────
-    samples = []
+    cap = None
+    samples, raw_samples, frame_aspect = [], [], None
     max_retries_per_sample = 3  # prevent infinite re-record loops
 
     try:
+        cap = setup_camera(camera_index=args.camera)
+        print()
+
+        # ─── Stage 1: Face Enrollment (kept in memory until saved) ────
+        face_emb_result = capture_face_enrollment_phase(cap, username)
+        if face_emb_result is False:
+            return
+
+        print()
+        print("  ============================================================")
+        print("    STEP 2 OF 2: Gesture Trajectory & Kinematic Enrollment")
+        print(f"    You will record your gesture {NUM_REGISTRATION_SAMPLES} times.")
+        print("  ============================================================")
+        print()
+
+        # ─── Record multiple samples (with quality gate) ─────────────
         sample_num = 1
         while sample_num <= NUM_REGISTRATION_SAMPLES:
             retries = 0
@@ -591,22 +605,20 @@ def main():
                 print(f"  --- Sample {sample_num}/{NUM_REGISTRATION_SAMPLES} "
                       f"--- Press [R] when ready ---")
 
-                sample = record_one_sample(
+                recorded = record_one_sample(
                     cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
                     sample_num, NUM_REGISTRATION_SAMPLES, username
                 )
 
-                if sample is None:
-                    print("  Registration cancelled.")
+                if recorded is None:
+                    print("  Registration cancelled. Existing profile (if any) is unchanged.")
                     return
+                sample, raw, aspect = recorded
 
                 # ── Quality Gate: check for outliers ──────────
-                is_ok, quality_msg = validate_sample_quality(
-                    sample, samples
-                )
+                is_ok, quality_msg = validate_sample_quality(sample, samples)
 
                 if is_ok:
-                    samples.append(sample)
                     accepted = True
                     print(f"        ✓ Sample {sample_num} {quality_msg}")
                 else:
@@ -616,10 +628,15 @@ def main():
                     print(f"          ({quality_msg})")
                     if retries >= max_retries_per_sample:
                         # Accept after max retries to avoid blocking
-                        samples.append(sample)
                         accepted = True
                         print(f"        ⚠ Accepted after {retries} "
                               f"retries (max retries reached).")
+
+                if accepted:
+                    samples.append(sample)
+                    raw_samples.append(raw)
+                    if frame_aspect is None:
+                        frame_aspect = aspect
 
             # Brief pause message between samples (not on the last one)
             if sample_num < NUM_REGISTRATION_SAMPLES:
@@ -630,11 +647,12 @@ def main():
             sample_num += 1
 
     except KeyboardInterrupt:
-        print("\n  Interrupted.")
+        print("\n  Interrupted. Existing profile (if any) is unchanged.")
         return
 
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         cv2.destroyAllWindows()
         hands.close()
 
@@ -668,13 +686,15 @@ def main():
     print(f"  Segment mismatch limit:  "
           f"{segment_details['threshold']:.4f}")
 
-    # ─── Biometric Identity Profile (Anti-Shoulder-Surfing) ─────────
-    anthro_profile = calibrate_anthropometric_profile(samples)
-    kinematic_profile = calibrate_kinematic_profile(samples)
-    print(f"  Hand bone aspect ratio:  {anthro_profile['baseline'][0]:.4f} "
-          f"(tolerance: ±{anthro_profile['tolerance']:.0%})")
-    print(f"  Kinematic jerk baseline: {kinematic_profile['baseline_jerk']:.5f}")
-    print("  Biometric identity baseline calibrated (Anti-Shoulder-Surfing enabled).")
+    # ─── Order-gate entropy check ─────────────────────────────────────
+    # If no finger ever changes state, the transition-order gate compares
+    # two empty sequences and cannot tell gestures apart; security then
+    # rests on the pose, path and biometric gates alone.
+    if all(not extract_finger_transitions(s) for s in samples):
+        print()
+        print("  ⚠ WARNING: Your gesture never raises or folds a finger.")
+        print("    The finger-order gate cannot add security for it.")
+        print("    Consider a gesture with a finger sequence (e.g. 1-2-4-3).")
 
     # ─── Cohort-based uniqueness check ────────────────────────────────
     print()
@@ -698,14 +718,33 @@ def main():
               f"{uniqueness['min_impostor_distance']:.4f}")
         print()
 
-    # ─── Save registration ────────────────────────────────────────────
-    user_dir = save_registration(
-        username, samples, threshold, pairwise_distances
-    )
+    # ─── Save registration (atomic: templates + raw + config + face) ──
+    face_embedding = face_emb_result if isinstance(face_emb_result, np.ndarray) else None
+    try:
+        user_dir = save_registration(
+            username, samples, threshold, pairwise_distances,
+            raw_samples=raw_samples, frame_aspect=frame_aspect,
+            face_embedding=face_embedding,
+        )
+    except (OSError, ValueError) as e:
+        print(f"  ERROR: Could not save registration: {e}")
+        print("  Existing profile (if any) is unchanged.")
+        return
 
-    if face_emb_result is not None and not isinstance(face_emb_result, bool):
-        face_path = save_face_embedding(username, face_emb_result, TEMPLATES_DIR)
-        face_status_str = f"ENROLLED ({os.path.basename(face_path)})"
+    config = _read_config(username)
+    anthro_profile = config["anthropometric_profile"]
+    kinematic_profile = config["kinematic_profile"]
+    print(f"  Hand bone aspect ratio:  {anthro_profile['baseline'][0]:.4f} "
+          f"(tolerance: ±{anthro_profile['tolerance']:.0%})")
+    print(f"  Kinematic jerk baseline: {kinematic_profile['baseline_jerk']:.6g}")
+    if "trajectory_threshold" in config:
+        print(f"  Hand path limit:         {config['trajectory_threshold']:.4f}")
+    print("  Biometric identity baseline calibrated (Anti-Shoulder-Surfing enabled).")
+
+    if face_embedding is not None:
+        face_status_str = "ENROLLED (face_embedding.npy)"
+    elif config.get("face_enrolled"):
+        face_status_str = "KEPT existing face_embedding.npy (update: enroll_face.py)"
     else:
         face_status_str = "SKIPPED (Legacy Mode - Face Unenrolled)"
 
@@ -714,7 +753,7 @@ def main():
     print(f"  REGISTRATION COMPLETE for '{username}'!")
     print("  " + "=" * 50)
     print(f"  Samples saved:  {len(samples)}")
-    print(f"  Threshold:      {threshold:.4f}")
+    print(f"  Threshold:      {config['threshold']:.4f}")
     print(f"  Face Profile:   {face_status_str}")
     print(f"  Location:       {user_dir}")
     print()

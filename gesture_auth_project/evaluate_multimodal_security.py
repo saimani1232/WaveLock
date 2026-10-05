@@ -1,242 +1,179 @@
 """
-Comprehensive Multimodal Biometric Benchmark (N = 180 Trials)
+Multimodal Biometric Benchmark (N = 180 synthetic trials)
 
-Directly evaluates the panel's critique regarding similar-build/sibling individuals:
-Compares 4 Architectural Configurations across 6 Evaluation Cohorts:
-  1. Config 1: Macro Gesture Only (DTW + Finger State + Transition + Segment Max)
-  2. Config 2: Gesture + Hand Geometry + Kinematics (WaveLock Biometrics)
-  3. Config 3: Face Only (SFace 128-D Deep Feature Embedding)
-  4. Config 4: Proposed Multimodal Cascade (Face Anchor + Dynamic Gesture + Hand Biometrics)
+Compares 4 architectural configurations across 6 threat cohorts:
+  1. Macro Gesture Only (DTW + Finger State + Transition + Segment gates)
+  2. Gesture + Hand Biometrics (anthropometrics + kinematics)
+  3. Face Only (SFace cosine vs the operational threshold)
+  4. Full Multimodal Cascade (face anchor + gesture + hand biometrics)
 
-Cohorts Evaluated (30 trials each = 180 total trials):
-  - Cohort 1: Genuine User (Genuine Face + Genuine Gesture)
-  - Cohort 2: Zero-Effort Impostor (Random Face + Random Gesture)
-  - Cohort 3: Shoulder-Surfer / Distinct Hand (Impostor Face + Copied "1-2-4-3" + Distinct Hand)
-  - Cohort 4: PANEL CRITIQUE: Sibling / Similar Hand (Impostor Face + Copied "1-2-4-3" + Hand +-5%)
-  - Cohort 5: 2D Photo Presentation Attack (Genuine Face Photo + No/Random Gesture)
-  - Cohort 6: Sibling Look-alike Attack (Similar Face +-10% + Similar Hand + Copied Gesture)
+Cohorts (30 trials each):
+  1. Genuine user            - genuine face,    genuine gesture variations
+  2. Zero-effort impostor     - stranger face,   random cohort gestures
+  3. Shoulder-surfer          - stranger face,   copied gesture, distinct hand
+  4. Similar hand (sibling)   - stranger face,   copied gesture, hand +-5-10%
+  5. 2D photo + copied gesture- genuine face photo, copied gesture, attacker's hand
+  6. Sibling look-alike       - face in the 0.40-0.53 look-alike band,
+                                copied gesture, similar hand
+
+IMPORTANT: every trial is synthetic. Face embeddings are random unit vectors
+placed at a chosen cosine from the enrolled vector (not SFace outputs), and
+gestures are perturbations of the enrolled templates. Results show how the
+decision logic behaves, not real-world FAR/FRR; there is also no liveness
+detection, so cohort 5's outcome depends entirely on the hand biometrics.
+
+Usage:
+    python evaluate_multimodal_security.py [--user NAME] [--templates-dir DIR]
 """
 
-import sys
 import numpy as np
 
-from gesture_compare import (
-    load_all_user_templates,
-    load_user_threshold,
-    load_user_finger_state_threshold,
-    load_user_transition_threshold,
-    load_user_segment_threshold,
-    load_user_anthropometric_profile,
-    load_user_kinematic_profile,
-    authenticate_with_details,
-    list_registered_users,
-)
+from gesture_compare import authenticate_with_details
 from cohort_library import generate_cohort_library
 from evaluate_biometric_security import (
+    load_benchmark_user,
     generate_genuine_variations,
     generate_distinct_hand_impostors,
     generate_similar_hand_impostors,
 )
-from utils.face_auth import SFACE_COSINE_THRESHOLD
+from utils.face_auth import classify_face_score
+
+N_TRIALS = 30
+
+# Cosine ranges per face cohort. Genuine live faces typically score
+# 0.62-0.85 against their enrollment; a printed photo of the user slightly
+# lower; siblings fall in the look-alike band [0.40, 0.53).
+GENUINE_COSINE = (0.62, 0.85)
+PHOTO_COSINE = (0.58, 0.78)
+LOOKALIKE_COSINE = (0.41, 0.52)
 
 
-def create_synthetic_face_embedding(seed=42):
-    """Generate a realistic 128-D unit hypersphere face embedding."""
-    rng = np.random.RandomState(seed)
-    emb = rng.randn(128).astype(np.float32)
-    return emb / np.linalg.norm(emb)
+def random_unit_embedding(rng, dim=128):
+    v = rng.randn(dim)
+    return v / np.linalg.norm(v)
 
 
-def perturb_face_embedding(base_emb, noise_std=0.04, seed=None):
-    """Generate intra-class genuine facial variation (lighting, angle)."""
-    rng = np.random.RandomState(seed) if seed else np.random
-    noisy = base_emb + rng.normal(0, noise_std, 128).astype(np.float32)
-    return noisy / np.linalg.norm(noisy)
+def embedding_at_cosine(base, cosine, rng):
+    """Unit vector whose cosine similarity with unit vector `base` is exactly `cosine`."""
+    noise = rng.randn(base.shape[0])
+    orth = noise - np.dot(noise, base) * base
+    orth /= np.linalg.norm(orth)
+    return cosine * base + np.sqrt(max(0.0, 1.0 - cosine ** 2)) * orth
 
 
-def evaluate_multimodal_trial(face_emb_live, hand_sample, enrolled_face, templates,
-                              threshold, fst, tt, st, anthro_prof, kin_prof):
-    """
-    Evaluate an authentication attempt across all 4 architectural configurations.
-    """
-    # 1. Face Only Evaluation
+def face_cohort(base, n, rng, cosine_range=None):
+    if cosine_range is None:                     # unrelated strangers (~0 cosine)
+        return [random_unit_embedding(rng) for _ in range(n)]
+    lo, hi = cosine_range
+    return [embedding_at_cosine(base, rng.uniform(lo, hi), rng) for _ in range(n)]
+
+
+def evaluate_multimodal_trial(face_emb_live, hand_sample, enrolled_face, user):
+    """Evaluate one attempt under all 4 configurations."""
     face_sim = float(np.dot(enrolled_face, face_emb_live))
-    face_passed = face_sim >= SFACE_COSINE_THRESHOLD
+    face_passed, face_conf, face_reason = classify_face_score(face_sim)
 
-    # 2. Gesture Only & Multimodal Evaluation
-    granted_full, dist, best_idx, details = authenticate_with_details(
-        hand_sample, templates, threshold, fst, tt, st, anthro_prof, kin_prof,
+    granted_full, _, _, details = authenticate_with_details(
+        hand_sample, user["templates"], user["threshold"],
+        user["fst"], user["tt"], user["st"],
+        user["anthro_prof"], user["kin_prof"],
         face_match=face_passed,
-        face_confidence=max(0.0, min(1.0, (face_sim + 1.0) / 2.0))
+        face_confidence=face_conf,
+        face_details={"score": face_sim, "reason": face_reason},
     )
 
-    best_comp = details["comparisons"][best_idx]
-    macro_passed = (best_comp["passes_transition"] and
-                    best_comp["fused_score"] >= details["fusion_acceptance_threshold"])
-
-    gesture_bio_passed = macro_passed and details["passes_biometric"]
-    multimodal_passed = granted_full
-
+    macro_passed = details["passes_macro"]
     return {
         "macro_passed": macro_passed,
-        "gesture_bio_passed": gesture_bio_passed,
+        "gesture_bio_passed": macro_passed and details["passes_biometric"],
         "face_passed": face_passed,
-        "multimodal_passed": multimodal_passed,
+        "multimodal_passed": granted_full,
         "failure_reason": details.get("failure_reason"),
         "face_sim": face_sim,
     }
 
 
 def main():
-    print("=" * 75)
-    print("  WAVELOCK MULTIMODAL BIOMETRIC BENCHMARK (N = 180 Trials)")
-    print("  Evaluating Panel Critique: Similar Body/Hand Proportions & Lookalikes")
-    print("=" * 75)
+    user = load_benchmark_user(
+        description="WaveLock multimodal synthetic benchmark (180 trials)"
+    )
+    templates = user["templates"]
 
-    registered = list_registered_users()
-    if not registered:
-        print("No registered users found in templates/.")
-        return
-    username = "saimani" if "saimani" in registered else registered[0]
-    templates = load_all_user_templates(username)
-    threshold = load_user_threshold(username)
-    fst = load_user_finger_state_threshold(username)
-    tt = load_user_transition_threshold(username)
-    st = load_user_segment_threshold(username)
-    anthro_prof = load_user_anthropometric_profile(username, templates)
-    kin_prof = load_user_kinematic_profile(username, templates)
-
-    # Master Face Embedding for User
-    master_face = create_synthetic_face_embedding(seed=999)
-
-    N = 30
-    print(f"Target User: '{username}' ({len(templates)} templates)")
-    print("Generating 6 Evaluation Cohorts (30 independent trials each = 180 trials)...")
+    print("=" * 88)
+    print(f"  WAVELOCK MULTIMODAL BIOMETRIC BENCHMARK (N = {6 * N_TRIALS} synthetic trials)")
+    print("=" * 88)
+    print(f"Target User: '{user['username']}' ({len(templates)} templates)")
+    print("NOTE: synthetic faces/gestures; no liveness detection; wrist-path gate not exercised.")
     print()
 
-    # Cohort Definitions:
-    # 1. Genuine User: Genuine Face + Genuine Gesture
-    c1_faces = [perturb_face_embedding(master_face, noise_std=0.03, seed=1000 + i) for i in range(N)]
-    c1_hands = generate_genuine_variations(templates, count=N, seed=5555)
+    rng = np.random.RandomState(2026)
+    master_face = random_unit_embedding(rng)
 
-    # 2. Zero-Effort Impostor: Random Face + Random Gesture
-    c2_faces = [create_synthetic_face_embedding(seed=2000 + i) for i in range(N)]
-    c2_hands = ([g for g in generate_cohort_library()][:N]
-                if len(generate_cohort_library()) >= N
-                else generate_cohort_library() * (N // len(generate_cohort_library()) + 1))[:N]
-
-    # 3. Shoulder-Surfer (Distinct Hand): Impostor Face + Copied "1-2-4-3" + Distinct Hand
-    c3_faces = [create_synthetic_face_embedding(seed=3000 + i) for i in range(N)]
-    c3_hands = generate_distinct_hand_impostors(templates, count=N, seed=6666)
-
-    # 4. CRITICAL PANEL TEST: Sibling / Similar Hand
-    # Impostor Face + Copied "1-2-4-3" + Similar Hand Geometry (+-4-8%)
-    c4_faces = [create_synthetic_face_embedding(seed=4000 + i) for i in range(N)]
-    c4_hands = generate_similar_hand_impostors(templates, count=N, seed=7777)
-
-    # 5. 2D Photo Presentation Attack: Genuine Face (photo) + No/Random Gesture
-    c5_faces = [perturb_face_embedding(master_face, noise_std=0.01, seed=5000 + i) for i in range(N)]
-    c5_hands = c2_hands  # Random gestures / static poses
-
-    # 6. Sibling Look-alike Attack: Similar Face (partial facial resemblance) + Similar Hand + Copied Gesture
-    # Resembles face with high correlation (noise 0.25 -> cosine ~ 0.50)
-    c6_faces = [perturb_face_embedding(master_face, noise_std=0.28, seed=6000 + i) for i in range(N)]
-    c6_hands = generate_similar_hand_impostors(templates, count=N, seed=8888)
+    cohort_lib = generate_cohort_library()
+    random_gestures = (cohort_lib * (N_TRIALS // len(cohort_lib) + 1))[:N_TRIALS]
 
     cohorts = {
-        "1. Genuine User (Face + Gesture)": (c1_faces, c1_hands, True),
-        "2. Zero-Effort Impostor": (c2_faces, c2_hands, False),
-        "3. Shoulder-Surfer (Distinct Hand)": (c3_faces, c3_hands, False),
-        "4. Sibling / Similar Hand (Panel Focus)": (c4_faces, c4_hands, False),
-        "5. 2D Photo Spoof (Face Photo Alone)": (c5_faces, c5_hands, False),
-        "6. Sibling Look-alike Attack": (c6_faces, c6_hands, False),
+        "1. Genuine User (Face + Gesture)": (
+            face_cohort(master_face, N_TRIALS, rng, GENUINE_COSINE),
+            generate_genuine_variations(templates, count=N_TRIALS, seed=5555), True),
+        "2. Zero-Effort Impostor": (
+            face_cohort(master_face, N_TRIALS, rng),
+            random_gestures, False),
+        "3. Shoulder-Surfer (Distinct Hand)": (
+            face_cohort(master_face, N_TRIALS, rng),
+            generate_distinct_hand_impostors(templates, count=N_TRIALS, seed=6666), False),
+        "4. Similar Hand (Stranger Face)": (
+            face_cohort(master_face, N_TRIALS, rng),
+            generate_similar_hand_impostors(templates, count=N_TRIALS, seed=7777), False),
+        "5. 2D Photo + Copied Gesture": (
+            face_cohort(master_face, N_TRIALS, rng, PHOTO_COSINE),
+            generate_distinct_hand_impostors(templates, count=N_TRIALS, seed=9999), False),
+        "6. Sibling Look-alike Attack": (
+            face_cohort(master_face, N_TRIALS, rng, LOOKALIKE_COSINE),
+            generate_similar_hand_impostors(templates, count=N_TRIALS, seed=8888), False),
     }
 
     results = {}
     for name, (faces, hands, is_genuine) in cohorts.items():
-        macro_acc = 0
-        hand_bio_acc = 0
-        face_acc = 0
-        multimodal_acc = 0
-        reasons = []
-
+        counts = {"macro": 0, "hand_bio": 0, "face": 0, "multi": 0}
+        sims = []
         for f, h in zip(faces, hands):
-            res = evaluate_multimodal_trial(
-                f, h, master_face, templates, threshold, fst, tt, st, anthro_prof, kin_prof
-            )
-            if res["macro_passed"]:
-                macro_acc += 1
-            if res["gesture_bio_passed"]:
-                hand_bio_acc += 1
-            if res["face_passed"]:
-                face_acc += 1
-            if res["multimodal_passed"]:
-                multimodal_acc += 1
-            if res["failure_reason"]:
-                reasons.append(res["failure_reason"])
+            res = evaluate_multimodal_trial(f, h, master_face, user)
+            counts["macro"] += res["macro_passed"]
+            counts["hand_bio"] += res["gesture_bio_passed"]
+            counts["face"] += res["face_passed"]
+            counts["multi"] += res["multimodal_passed"]
+            sims.append(res["face_sim"])
+        results[name] = {"total": len(faces), "is_genuine": is_genuine,
+                         "sim_range": (min(sims), max(sims)), **counts}
 
-        results[name] = {
-            "total": N,
-            "is_genuine": is_genuine,
-            "macro_acc": macro_acc,
-            "hand_bio_acc": hand_bio_acc,
-            "face_acc": face_acc,
-            "multimodal_acc": multimodal_acc,
-            "reasons": reasons[:2],
-        }
-
-    # Print Table
-    print(f"{'Threat Scenario / Cohort':<38} | {'Macro Only':<10} | {'Hand Bio':<10} | {'Face Only':<10} | {'Multimodal':<10}")
-    print("-" * 88)
-
+    print(f"{'Threat Scenario / Cohort':<36} | {'Face cos':<11} | {'Macro Only':<11} | "
+          f"{'Hand Bio':<11} | {'Face Only':<11} | {'Multimodal':<11}")
+    print("-" * 110)
     for name, d in results.items():
         t = d["total"]
-        m_str = f"{d['macro_acc']}/{t} ({d['macro_acc']/t:.0%})"
-        h_str = f"{d['hand_bio_acc']}/{t} ({d['hand_bio_acc']/t:.0%})"
-        f_str = f"{d['face_acc']}/{t} ({d['face_acc']/t:.0%})"
-        multi_str = f"{d['multimodal_acc']}/{t} ({d['multimodal_acc']/t:.0%})"
-        print(f"{name:<38} | {m_str:<10} | {h_str:<10} | {f_str:<10} | {multi_str:<10}")
+        cells = [f"{d[k]}/{t} ({d[k] / t:.0%})" for k in ("macro", "hand_bio", "face", "multi")]
+        lo, hi = d["sim_range"]
+        print(f"{name:<36} | {lo:.2f}-{hi:.2f}   | " + " | ".join(f"{c:<11}" for c in cells))
+    print("=" * 110)
 
-    print("=" * 88)
-
-    # Global Metrics Calculation
     gen = results["1. Genuine User (Face + Gesture)"]
-    frr_macro = (gen["total"] - gen["macro_acc"]) / gen["total"]
-    frr_hand = (gen["total"] - gen["hand_bio_acc"]) / gen["total"]
-    frr_face = (gen["total"] - gen["face_acc"]) / gen["total"]
-    frr_multi = (gen["total"] - gen["multimodal_acc"]) / gen["total"]
+    impostors = [d for d in results.values() if not d["is_genuine"]]
+    imp_total = sum(d["total"] for d in impostors)
 
-    # Impostor Cohorts (2, 3, 4, 5, 6)
-    imp_total = sum(d["total"] for d in results.values() if not d["is_genuine"])
-    imp_macro = sum(d["macro_acc"] for d in results.values() if not d["is_genuine"])
-    imp_hand = sum(d["hand_bio_acc"] for d in results.values() if not d["is_genuine"])
-    imp_face = sum(d["face_acc"] for d in results.values() if not d["is_genuine"])
-    imp_multi = sum(d["multimodal_acc"] for d in results.values() if not d["is_genuine"])
-
-    far_macro = imp_macro / imp_total
-    far_hand = imp_hand / imp_total
-    far_face = imp_face / imp_total
-    far_multi = imp_multi / imp_total
-
-    print("\n  EMPIRICAL METRICS SUMMARY (180 Total Trials, 150 Impostor Attacks):")
-    print("=" * 75)
-    print(f"  Configuration 1 [Macro Gesture Only]:")
-    print(f"    - False Rejection Rate (FRR):  {frr_macro:.1%}")
-    print(f"    - False Acceptance Rate (FAR): {far_macro:.1%}  <-- HIGH VULNERABILITY!")
-    print()
-    print(f"  Configuration 2 [Hand Biometrics: Orthometrics + Kinematics]:")
-    print(f"    - False Rejection Rate (FRR):  {frr_hand:.1%}")
-    print(f"    - False Acceptance Rate (FAR): {far_hand:.1%}")
-    print()
-    print(f"  Configuration 3 [Face Recognition Alone]:")
-    print(f"    - False Rejection Rate (FRR):  {frr_face:.1%}")
-    print(f"    - False Acceptance Rate (FAR): {far_face:.1%}  (Failed against 2D Photo Spoofs: 30/30 passed!)")
-    print()
-    print(f"  Configuration 4 [Proposed Multimodal Cascade: Face Anchor + Gesture + Hand Bio]:")
-    print(f"    - False Rejection Rate (FRR):  {frr_multi:.1%}")
-    print(f"    - False Acceptance Rate (FAR): {far_multi:.1%}  <-- NEAR ZERO IMPOSTOR ACCESS!")
-    print(f"    - Half Total Error Rate (HTER): {(far_multi + frr_multi)/2:.1%}")
-    print("=" * 75)
+    print(f"\n  METRICS SUMMARY ({sum(d['total'] for d in results.values())} trials, "
+          f"{imp_total} impostor attempts):")
+    for label, key in (("Macro Gesture Only", "macro"),
+                       ("Gesture + Hand Biometrics", "hand_bio"),
+                       ("Face Recognition Alone", "face"),
+                       ("Full Multimodal Cascade", "multi")):
+        frr = (gen["total"] - gen[key]) / gen["total"]
+        far = sum(d[key] for d in impostors) / imp_total
+        print(f"  {label}:")
+        print(f"    - False Rejection Rate (FRR):  {frr:.1%}")
+        print(f"    - False Acceptance Rate (FAR): {far:.1%}")
+        print(f"    - Half Total Error Rate (HTER): {(far + frr) / 2:.1%}")
+    print("=" * 110)
 
 
 if __name__ == "__main__":

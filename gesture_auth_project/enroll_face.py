@@ -5,9 +5,7 @@ Captures frontal face frames from webcam, computes 128-D SFace feature embedding
 and saves the master face profile to templates/<username>/face_embedding.npy.
 """
 
-import os
 import sys
-import time
 import argparse
 import cv2
 import numpy as np
@@ -16,17 +14,18 @@ from utils.face_auth import (
     detect_primary_face,
     extract_face_embedding,
     save_face_embedding,
-    load_face_embedding,
-    verify_face,
 )
 from utils.camera_utils import open_camera, print_camera_diagnostics
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+from gesture_compare import (
+    TEMPLATES_DIR,
+    list_registered_users,
+    normalize_username,
+    set_face_enrolled_flag,
+)
 WINDOW_NAME = "WaveLock — Face Enrollment"
 
 
-def enroll_face_interactive(username, camera_index=0):
+def enroll_face_interactive(username, camera_index=None):
     """Interactively capture and enroll face from webcam."""
     print()
     print("=" * 60)
@@ -100,8 +99,14 @@ def enroll_face_interactive(username, camera_index=0):
                 if enrolled_count >= REQUIRED_FRAMES:
                     # Average and normalize master embedding
                     master_emb = np.mean(embeddings, axis=0)
-                    master_emb /= np.linalg.norm(master_emb)
+                    norm = np.linalg.norm(master_emb)
+                    if norm < 1e-8:
+                        print("  [FAIL] Invalid face embedding captured. Try again.")
+                        embeddings, enrolled_count, enrolling = [], 0, False
+                        continue
+                    master_emb = master_emb / norm
                     save_path = save_face_embedding(username, master_emb, TEMPLATES_DIR)
+                    set_face_enrolled_flag(username)
 
                     print()
                     print("  [SUCCESS] High-security face profile enrolled successfully!")
@@ -138,7 +143,7 @@ def enroll_face_interactive(username, camera_index=0):
 
 def main():
     parser = argparse.ArgumentParser(description="WaveLock Face Enrollment Tool")
-    parser.add_argument("--user", "-u", type=str, default="saimani", help="Username to enroll face for")
+    parser.add_argument("--user", "-u", type=str, default=None, help="Registered username to enroll a face for")
     parser.add_argument("--camera", "--cam", "-c", dest="cam", type=int, default=None, help="Webcam index (default: auto-detect)")
     parser.add_argument("--list-cams", action="store_true", help="List available cameras and exit")
     args = parser.parse_args()
@@ -147,8 +152,27 @@ def main():
         print_camera_diagnostics()
         return
 
-    user = args.user.lower().replace(" ", "_")
-    enroll_face_interactive(user, camera_index=args.cam)
+    registered = list_registered_users()
+    if not registered:
+        print("  No registered users. Run gesture_capture.py first.")
+        sys.exit(1)
+
+    raw_user = args.user
+    if not raw_user:
+        print(f"  Registered users: {', '.join(registered)}")
+        raw_user = input("  Enroll face for: ")
+    try:
+        user = normalize_username(raw_user)
+    except ValueError as e:
+        print(f"  ERROR: {e}")
+        sys.exit(1)
+    if user not in registered:
+        print(f"  ERROR: User '{user}' is not registered. Register the gesture first "
+              f"with gesture_capture.py (registered: {', '.join(registered)}).")
+        sys.exit(1)
+
+    ok = enroll_face_interactive(user, camera_index=args.cam)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

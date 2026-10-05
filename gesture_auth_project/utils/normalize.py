@@ -155,3 +155,47 @@ def normalize_gesture(gesture_sequence, target_length=60):
     )
 
     return fully_normalized
+
+
+def extract_wrist_trajectory(gesture_sequence, frame_aspect=1.0,
+                             target_length=60):
+    """
+    Extract the global path of the hand through the air.
+
+    normalize_gesture() centres every frame on the wrist, which discards
+    where the hand travels. This recovers that path from the RAW landmarks
+    so in-air motion (e.g. a signature) can be matched.
+
+    The wrist position is centred on its mean (position-invariant) and
+    divided by the median palm length |p9 - p0| (camera-distance
+    invariant). MediaPipe x/y are normalised separately by frame width and
+    height, so x is multiplied by frame_aspect (width / height) to make
+    the two axes comparable. MediaPipe z is relative to the wrist, so the
+    wrist's own z is always ~0: depth motion is not captured.
+
+    Args:
+        gesture_sequence: raw MediaPipe landmarks, shape (N, 21, 3).
+        frame_aspect: frame width / height of the camera that recorded it.
+        target_length: frames after temporal resampling.
+
+    Returns:
+        numpy array of shape (target_length, 3), in palm lengths.
+    """
+    seq = np.asarray(gesture_sequence, dtype=np.float64)
+    if seq.ndim != 3 or seq.shape[1:] != (21, 3) or seq.shape[0] == 0:
+        raise ValueError(
+            f"Expected raw landmarks of shape (N, 21, 3), got {seq.shape}."
+        )
+
+    scaled = seq.copy()
+    scaled[..., 0] *= float(frame_aspect)
+
+    wrist = scaled[:, 0, :]
+    palm_lengths = np.linalg.norm(scaled[:, 9, :] - scaled[:, 0, :], axis=1)
+    scale = float(np.median(palm_lengths))
+    if scale < 1e-6:
+        scale = 1.0
+
+    trajectory = (wrist - wrist.mean(axis=0)) / scale
+    resampled = normalize_temporal(trajectory[:, None, :], target_length)
+    return resampled[:, 0, :]

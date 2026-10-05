@@ -12,11 +12,13 @@ import time
 import cv2
 import numpy as np
 
-# Silence noisy OpenCV internal C++ warnings
-os.environ["OPENCV_LOG_LEVEL"] = "FATAL"
-os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
+# Silence noisy OpenCV C++ warnings (e.g. DirectShow probing of absent
+# camera indices). This must be a runtime call: the OPENCV_LOG_LEVEL
+# environment variable is only read when cv2 is first imported, which the
+# entry scripts do before importing this module. 1 = FATAL (errors that
+# abort still print; 0 would silence everything).
 if hasattr(cv2, "setLogLevel"):
-    cv2.setLogLevel(0)
+    cv2.setLogLevel(1)
 
 
 def get_preferred_backend():

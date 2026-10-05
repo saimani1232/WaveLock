@@ -6,6 +6,8 @@ closing the hand-geometry collision vulnerability among twins/similar-build indi
 """
 
 import os
+import tempfile
+
 import cv2
 import numpy as np
 
@@ -154,6 +156,18 @@ def verify_face(live_frame, enrolled_embedding, threshold=SFACE_COSINE_THRESHOLD
         cv2.FaceRecognizerSF_FR_COSINE
     ))
 
+    is_match, conf, failure_reason = classify_face_score(score, threshold)
+    return is_match, score, conf, bbox, failure_reason
+
+
+def classify_face_score(score, threshold=SFACE_COSINE_THRESHOLD):
+    """
+    Map an SFace cosine similarity to (is_match, confidence, failure_reason).
+
+    Single source of truth for the genuine / lookalike / stranger tiers, used
+    by live verification and by the evaluation scripts.
+    """
+    score = float(score)
     is_match = score >= threshold
 
     # Multi-tier confidence mapping separating Genuine vs Sibling Lookalikes vs Strangers
@@ -171,15 +185,69 @@ def verify_face(live_frame, enrolled_embedding, threshold=SFACE_COSINE_THRESHOLD
         conf = max(0.0, min(0.35, 0.35 * (max(0.0, score) / SFACE_LOOKALIKE_FLOOR)))
         failure_reason = "impostor_face_identity"
 
-    return is_match, score, conf, bbox, failure_reason
+    return is_match, conf, failure_reason
+
+
+def verify_face_over_frames(frames, enrolled_embedding, max_samples=6):
+    """
+    Verify identity across several frames of one authentication attempt.
+
+    Frames are sampled evenly. The attempt matches only if the MEDIAN cosine
+    clears the threshold AND a majority of frames with a detected face pass
+    individually, so one lucky frame cannot unlock and one occluded frame
+    cannot lock out.
+
+    Returns:
+        dict with match (bool), score (median cosine), confidence, reason
+        (None when matched), frames_checked, faces_detected.
+    """
+    n_frames = len(frames) if frames is not None else 0
+    if n_frames == 0:
+        return {"match": False, "score": 0.0, "confidence": 0.0,
+                "reason": "no_face_detected", "frames_checked": 0,
+                "faces_detected": 0}
+
+    indices = np.linspace(0, n_frames - 1, min(max_samples, n_frames)).astype(int)
+    results = [verify_face(frames[i], enrolled_embedding) for i in indices]
+    detected = [r for r in results if r[3] is not None]
+    if not detected:
+        return {"match": False, "score": 0.0, "confidence": 0.0,
+                "reason": "no_face_detected", "frames_checked": len(indices),
+                "faces_detected": 0}
+
+    median_score = float(np.median([r[1] for r in detected]))
+    n_pass = sum(1 for r in detected if r[0])
+    majority = n_pass >= (len(detected) + 1) // 2
+    median_ok, confidence, tier_reason = classify_face_score(median_score)
+    match = bool(majority and median_ok)
+
+    if match:
+        reason = None
+    elif median_ok:
+        # Median clears the bar but most individual frames do not.
+        reason = "unstable_face_match"
+    else:
+        reason = tier_reason
+
+    return {"match": match, "score": median_score, "confidence": confidence,
+            "reason": reason, "frames_checked": len(indices),
+            "faces_detected": len(detected)}
 
 
 def save_face_embedding(username, embedding, templates_dir):
-    """Save user's 128-D face embedding to templates/<username>/face_embedding.npy."""
+    """Atomically save the 128-D face embedding to templates/<username>/face_embedding.npy."""
     user_dir = os.path.join(templates_dir, username)
     os.makedirs(user_dir, exist_ok=True)
     out_path = os.path.join(user_dir, "face_embedding.npy")
-    np.save(out_path, embedding.astype(np.float32))
+    fd, tmp_path = tempfile.mkstemp(dir=user_dir, prefix=".tmp_", suffix=".npy")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            np.save(f, np.asarray(embedding, dtype=np.float32).reshape(128))
+        os.replace(tmp_path, out_path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
     return out_path
 
 

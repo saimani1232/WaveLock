@@ -68,8 +68,9 @@ graph TD
     I --> I2["Gate 2: Finger State Average (Weight 0.30)"]
     I --> I3["Gate 3: Transition Order (HARD BOOLEAN GATE)"]
     I --> I4["Gate 4: Segment Max Mismatch (Weight 0.25)"]
+    I --> I5["Hand-Path Gate: wrist trajectory DTW (new registrations)"]
     I1 & I2 & I4 --> J1["Gesture Fused Score: S_macro = 0.45·S₁ + 0.30·S₂ + 0.25·S₄"]
-    I3 & J1 --> K{"Gate 3 Passes AND S_macro ≥ 55%?"}
+    I3 & I5 & J1 --> K{"Gates 1 & 3 pass, Gate 2 or 4 passes, path passes, S_macro ≥ 55%?"}
     K -->|No| L["❌ ACCESS DENIED: Gesture Spoof / Structural Sequence Error"]
     K -->|Yes| M["✅ Stage 2 Passed: Dynamic Sequence Authentic"]
     
@@ -114,12 +115,17 @@ graph TD
 2. **Gate 2: Finger State Average Mismatch (Weight: $0.30$)**:
    - Computes 3D inter-phalangeal joint angles per frame to determine whether each finger is extended ($\ge 150^\circ$) or folded.
    - Catches gestures using incorrect finger combinations.
-3. **Gate 3: Finger Transition Order (HARD BOOLEAN GATE)**:
+3. **Gate 3: Finger Transition Order (HARD GATE)**:
    - Extracts the sequential transitions of finger extension (e.g., Index Up $\rightarrow$ Pinky Up $\rightarrow$ Thumb Up).
    - Evaluates Levenshtein edit distance against stored patterns. **If the sequential order is wrong, access is immediately denied regardless of confidence scores.**
 4. **Gate 4: Segment Max Mismatch (Weight: $0.25$)**:
    - Divides 60 frames into 6 discrete temporal segments (10 frames each) and evaluates the worst-performing segment.
    - Catches localized spoofing attacks where an attacker gets only part of the gesture correct.
+5. **Hand-Path Gate (users registered with raw recordings)**:
+   - Pose normalization centres every frame on the wrist, which removes *where the hand travels*. The raw wrist path is therefore matched separately: centred on its mean, scaled by the median palm length, compared by DTW against a per-user calibrated threshold (floor `MIN_TRAJECTORY_THRESHOLD = 3.0`).
+   - Users registered before this existed have no raw recordings; the gate is skipped for them until they re-register.
+
+**Macro decision (per template):** Gate 3 **and** Gate 1 (DTW ≤ θ_DTW) must pass, at least one of Gate 2 / Gate 4 must pass (they measure the same finger states), the hand path must pass when available, **and** the fused score must reach 0.55. The fused score alone can no longer carry a template that fails Gate 1.
 
 $$\mathbf{S_{\text{macro}} = 0.45 \times \left(1 - \frac{\text{DTW}}{\theta_{\text{DTW}}}\right) + 0.30 \times (1 - \text{Mismatch}_{\text{avg}}) + 0.25 \times (1 - \text{Mismatch}_{\text{seg}})}$$
 
@@ -128,29 +134,33 @@ $$\mathbf{S_{\text{macro}} = 0.45 \times \left(1 - \frac{\text{DTW}}{\theta_{\te
 ### Stage 3: Hand Morphology & Neuromotor Kinematics
 Even if an observer watches your gesture and copies the exact sequence:
 1. **Anthropometric Hand Morphology Gate**:
-   - Extracts 5 scale-invariant skeletal bone length ratios. These are computed from rigid metacarpal palm-plate landmarks (MCP 5, 9, 17, Wrist 0, CMC 2, PIP 8) using the `metacarpal_invariant_v2` method, which is stable across all hand postures including fists and signatures:
-     $$\text{Ratio}_1 = \frac{\|\text{Thumb MCP} - \text{Thumb IP}\|}{\|\text{Wrist} - \text{Middle MCP}\|}, \quad \text{Ratio}_2 = \frac{\|\text{Index PIP} - \text{Index DIP}\|}{\|\text{Index MCP} - \text{Index PIP}\|}, \quad \dots$$
+   - Extracts 5 scale-invariant skeletal bone length ratios from rigid palm-plate landmarks (Wrist 0, Thumb MCP 2, Index MCP 5, Index Tip 8, Middle MCP 9, Pinky MCP 17) using the `metacarpal_invariant_v2` method. Match rule: mean relative deviation ≤ τ_A **and** at least 4 of 5 ratios within 2.2·τ_A:
+     $$r_1 = \frac{\|p_{17} - p_5\|}{\|p_9 - p_0\|}, \; r_2 = \frac{\|p_5 - p_0\|}{\|p_9 - p_0\|}, \; r_3 = \frac{\|p_{17} - p_0\|}{\|p_9 - p_0\|}, \; r_4 = \frac{\|p_8 - p_5\|}{\|p_9 - p_0\|}, \; r_5 = \frac{\|p_5 - p_2\|}{\|p_9 - p_0\|}$$
    - Because these are ratios between rigid human bone segments, they survive unit-sphere scaling and distance from camera, but uniquely reflect your physical hand anatomy.
    - Blocks shoulder-surfers with `impostor_hand_morphology`.
 2. **Neuromotor Kinematic Fluidity Profile**:
-   - Computes continuous fingertip acceleration and dimensionless jerk:
-     $$J_{\text{dim}} = \frac{(t_2 - t_1)^5}{v_{\text{peak}}^2} \int_{t_1}^{t_2} \left(\frac{d^3\mathbf{x}}{dt^3}\right)^2 dt$$
+   - Computes the fingertip velocity envelope, a 10-bin rhythm histogram, mean absolute jerk (second difference of velocity) as a ratio to the user's baseline (≤ 1.75), peak-velocity phase and mid-gesture dwell.
+   - For users registered with raw recordings, these are computed from the raw landmarks after Savitzky–Golay smoothing at the native frame rate and cubic resampling. Without this, jerk was dominated by MediaPipe jitter and by linear-interpolation kinks, and changed ~2× with the recording frame rate.
    - Distinguishes authentic subconscious muscle-memory execution from hesitant, observation-replay imitation. Rejects jerky copies with `impostor_kinematic_dynamics`.
 
 ---
 
 ### Stage 4: Multimodal Consensus Decision & Anti-Poisoning
 - **Multimodal Decision Rule**: Access is granted **if and only if**:
-  $$\text{Gate 3 Passes} \quad \land \quad S_{\text{macro}} \ge 0.55 \quad \land \quad \text{Face Verified } (\ge 0.530) \quad \land \quad \text{Hand Anatomy Verified} \quad \land \quad \text{Kinematics Verified}$$
+  $$\text{Macro gates pass (see Stage 2)} \;\land\; \text{Face Verified } (\ge 0.530) \;\land\; \text{Hand Anatomy Verified} \;\land\; \text{Kinematics Verified}$$
+- **Soft consensus:** if only hand anatomy is borderline (confidence ≥ 0.35), kinematics pass, and the face's **raw cosine** is ≥ 0.70, anatomy may be admitted.
+- **Face over the attempt:** six frames are sampled; the median cosine must clear 0.530 and a majority of detected faces must pass individually. Failures are reported as `impostor_face_identity`, `lookalike_sibling_detected`, `no_face_detected` or `unstable_face_match`.
 - **Multimodal Fused Score**:
   $$\mathbf{S_{\text{multi}} = 0.40 \times S_{\text{face}} + 0.35 \times S_{\text{macro}} + 0.25 \times S_{\text{hand\_bio}}}$$
 - **Hardened Adaptive Template Aging**:
   - Automatically updates the oldest stored gesture template on natural biomechanical drift.
-  - **Anti-Poisoning Guard**: Strictly requires $\text{Face Match} \land \text{Face Confidence} \ge 70\% \land \text{Hand Anatomy Confidence} \ge 85\%$. An attacker can never poison stored templates.
+  - **Anti-Poisoning Guard**: requires face match with face confidence ≥ 0.70 (mapped scale ≈ cosine 0.59), hand-anatomy confidence ≥ 0.85, kinematic confidence ≥ 0.65 and DTW ≤ 0.70·θ_DTW. Templates, raw recordings and `config.json` are updated together via atomic writes, and the running session reloads the whole profile afterwards.
 
 ---
 
 ## 4. Empirical Security Evaluation (180 Trials)
+
+> **Note:** the table below was produced by an earlier version of the benchmark. All trials are **synthetic** (face embeddings are random vectors placed at chosen cosines, gestures are perturbations of the enrolled templates), and the earlier version's "look-alike" cohort actually scored ≈0.30 cosine, below the look-alike band. The benchmark has since been corrected (`evaluate_multimodal_security.py`: controlled cosine bands, the live face-scoring function, a photo-plus-copied-gesture cohort). Re-run it against a real enrolled user before quoting numbers; it does not measure real-world FAR/FRR, and there is no liveness detection.
 
 We benchmarked WaveLock across 6 diverse threat cohorts ($N = 30$ trials each = 180 total trials, including 150 active impostor presentation attacks):
 
@@ -195,14 +205,16 @@ gesture_auth_project/
 │   └── <username>/
 │       ├── face_embedding.npy                   # 128-D normalized master face embedding vector
 │       ├── gesture_1.npy ... gesture_5.npy      # 5 normalized gesture templates (60, 21, 3)
+│       ├── gesture_1_raw.npy ... _5_raw.npy     # raw landmark recordings (N, 21, 3): hand path + kinematics
 │       └── config.json                          # MAD-calibrated thresholds & biometric baselines
 ├── gesture_auth.py                              # MAIN: Real-time authentication loop & OpenCV UI
 ├── gesture_capture.py                           # MAIN: Stage 1 Face + Stage 2 Gesture Registration
 ├── enroll_face.py                               # STANDALONE: Fast 3-second face enrollment tool
 ├── gesture_compare.py                           # CORE: Decision engine, score fusion, aging
 ├── cohort_library.py                            # 6 synthetic impostor gestures for negative sampling
-├── evaluate_multimodal_security.py              # 180-trial 6-cohort scientific benchmark suite
-└── evaluate_biometric_security.py               # Hand anatomy & kinematic evaluation benchmark
+├── evaluate_multimodal_security.py              # 180-trial 6-cohort synthetic benchmark
+├── evaluate_biometric_security.py               # Hand anatomy & kinematic synthetic benchmark
+└── test_wavelock.py                             # Self-checks (no camera needed): python test_wavelock.py
 ```
 
 ---
@@ -210,11 +222,16 @@ gesture_auth_project/
 ## 6. Quick Start & Operational Guide
 
 ### Requirements
-- Python 3.8+
-- OpenCV (`opencv-python` with DNN backend)
-- MediaPipe (`mediapipe`)
-- NumPy & SciPy
-- DTAIDistance (`dtaidistance`)
+- **Python 3.9–3.12** (the pinned `mediapipe==0.10.21` has no wheels for 3.13+)
+- Install into a virtual environment:
+  ```bash
+  python -m venv venv
+  venv\Scripts\activate            # Windows  (macOS/Linux: source venv/bin/activate)
+  pip install -r requirements.txt
+  ```
+- Verify the installation (no camera needed): `python test_wavelock.py`
+- Usernames are normalised to lower case with spaces as `_`, and may contain only letters, digits, `_`, `-` and `.`.
+- **Existing users:** profiles registered before raw recordings were stored keep working unchanged, but the hand-path gate and frame-rate-independent kinematics only activate after re-registering.
 
 ### 1. Register a New User
 ```bash
@@ -281,9 +298,13 @@ python enroll_face.py --user saimani --camera 1
     "baseline_jerk": 0.000245,
     "baseline_peak_phase": 0.3667,
     "max_allowed_dwell": 6,
-    "tolerance": 0.35
+    "tolerance": 0.35,
+    "method": "smoothed_raw_v2"
   },
+  "frame_aspect": 1.333333,
+  "trajectory_threshold": 3.0,
+  "trajectory_method": "wrist_path_dtw_v1",
   "face_enrolled": true
 }
 ```
-*Note: Facial embeddings are stored separately in `face_embedding.npy` (128 float32 values on the unit hypersphere) and loaded dynamically alongside gesture templates. Anthropometric profiles use `metacarpal_invariant_v2` (5 posture-invariant bone ratios from the rigid palm plate) and kinematic profiles store 10-bin velocity distributions, jerk baseline, peak phase, and dwell limits.*
+*Note: Facial embeddings are stored separately in `face_embedding.npy` (128 float32 values on the unit hypersphere) and loaded dynamically alongside gesture templates. Anthropometric profiles use `metacarpal_invariant_v2` (5 posture-invariant bone ratios from the rigid palm plate) and kinematic profiles store 10-bin velocity distributions, jerk baseline, peak phase, and dwell limits. A kinematic profile without `"method"` is a legacy profile computed from the 60-frame templates; `trajectory_threshold` / `frame_aspect` exist only for profiles registered with raw recordings. Registration and template aging write through a staging folder / atomic file replacement, so an interrupted save never corrupts a profile; a corrupted `config.json` is reported instead of being silently overwritten.*

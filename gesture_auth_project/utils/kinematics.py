@@ -18,12 +18,70 @@ Key Kinematic Features:
 """
 
 import numpy as np
+from scipy.interpolate import CubicSpline
+from scipy.signal import savgol_filter
+
+from utils.normalize import normalize_spatial
 
 # Active fingertips: Index (8), Middle (12), Ring (16), Pinky (20)
 FINGERTIP_INDICES = [8, 12, 16, 20]
 
 # Default kinematic dissimilarity tolerance
 DEFAULT_KINEMATIC_TOLERANCE = 0.35
+
+# Profiles computed from raw (un-resampled) landmarks carry this method tag.
+# Profiles without a "method" key are legacy: their baseline was computed
+# from the 60-frame linearly resampled templates, so the live signature must
+# be computed the same way to stay comparable.
+KINEMATIC_METHOD_SMOOTHED = "smoothed_raw_v2"
+
+# Savitzky-Golay smoothing window as a fraction of the recorded frame count.
+# Differentiating raw MediaPipe landmarks three times amplifies tracking
+# jitter until it dominates the jerk value; linear resampling to 60 frames
+# adds interpolation kinks whose size depends on the recorded frame count.
+# Smoothing at the native rate, then cubic resampling, removes both.
+# ponytail: 0.15 tuned on synthetic jitter (sigma=0.003); retune on real data.
+SMOOTHING_WINDOW_FRACTION = 0.15
+SMOOTHING_POLYORDER = 3
+
+
+def prepare_kinematic_sequence(raw_sequence, target_length=60):
+    """
+    Build the sequence used for kinematic features from RAW landmarks.
+
+    Frames are spatially normalised (same space as the pose templates),
+    smoothed along time at the native frame rate, then resampled to
+    target_length with a cubic spline (no piecewise-linear kinks).
+
+    Args:
+        raw_sequence: raw MediaPipe landmarks, shape (N, 21, 3).
+        target_length: frames after resampling.
+
+    Returns:
+        numpy array of shape (target_length, 21, 3).
+    """
+    raw = np.asarray(raw_sequence, dtype=np.float64)
+    if raw.ndim != 3 or raw.shape[1:] != (21, 3) or raw.shape[0] == 0:
+        raise ValueError(
+            f"Expected raw landmarks of shape (N, 21, 3), got {raw.shape}."
+        )
+
+    spatial = np.array([normalize_spatial(frame) for frame in raw])
+    n_frames = spatial.shape[0]
+    if n_frames < 2:
+        return np.tile(spatial, (target_length, 1, 1))
+
+    window = max(5, int(n_frames * SMOOTHING_WINDOW_FRACTION) | 1)
+    if window > n_frames:
+        window = n_frames if n_frames % 2 == 1 else n_frames - 1
+    if window > SMOOTHING_POLYORDER:
+        spatial = savgol_filter(
+            spatial, window, SMOOTHING_POLYORDER, axis=0
+        )
+
+    t_src = np.linspace(0.0, 1.0, n_frames)
+    t_dst = np.linspace(0.0, 1.0, target_length)
+    return CubicSpline(t_src, spatial, axis=0)(t_dst)
 
 
 def extract_velocity_profile(gesture_sequence):
@@ -140,19 +198,24 @@ def extract_kinematic_signature(gesture_sequence):
 
     return {
         "binned_velocity": [round(v, 4) for v in binned_vel],
-        "jerk": round(jerk, 6),
+        "jerk": float(f"{jerk:.6g}"),  # significant digits: jerk can be ~1e-6
         "peak_phase": round(peak_phase, 4),
         "mean_speed": round(mean_speed, 4),
         "max_mid_dwell": max_mid_dwell,
     }
 
 
-def calibrate_kinematic_profile(templates):
+def calibrate_kinematic_profile(templates, method=None):
     """
     Calibrate a user's behavioral kinematic profile from registration templates.
 
     Args:
-        templates: list of numpy arrays, each of shape (N, 21, 3).
+        templates: list of numpy arrays, each of shape (N, 21, 3). For
+            method=KINEMATIC_METHOD_SMOOTHED these must come from
+            prepare_kinematic_sequence(); otherwise they are the 60-frame
+            pose templates (legacy).
+        method: tag stored in the profile so authentication computes the
+            live signature the same way. None keeps the legacy format.
 
     Returns:
         dict containing:
@@ -187,13 +250,16 @@ def calibrate_kinematic_profile(templates):
     max_dwell_baseline = max(dwells) if dwells else 2
     max_allowed_dwell = max(5, max_dwell_baseline + 3)
 
-    return {
+    profile = {
         "baseline_binned_velocity": [round(float(v), 4) for v in mean_binned],
-        "baseline_jerk": round(mean_jerk, 6),
+        "baseline_jerk": float(f"{mean_jerk:.6g}"),
         "baseline_peak_phase": round(mean_peak_phase, 4),
         "max_allowed_dwell": max_allowed_dwell,
         "tolerance": round(float(calibrated_tolerance), 4),
     }
+    if method is not None:
+        profile["method"] = method
+    return profile
 
 
 def compare_kinematic_signatures(live_sig, baseline_profile, tolerance=DEFAULT_KINEMATIC_TOLERANCE):

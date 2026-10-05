@@ -1,3 +1,5 @@
+# Python 3.9-3.12 only: mediapipe 0.10.21 publishes no wheels for 3.13+.
+# Verified with Python 3.12.6 (numpy 1.26.4, scipy 1.17.1, dtaidistance 2.5.1).
 mediapipe==0.10.21
 opencv-python==4.11.0.86
 numpy>=1.24.0,<2

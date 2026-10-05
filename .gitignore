@@ -20,6 +20,21 @@ gesture_auth_project/templates/*
 .DS_Store
 Thumbs.db
 
+# Not code: kept local only (public repo holds the code, models, tests and README)
+# - report drafts, notes and personal details (unsubmitted report; plagiarism check)
+gesture_auth_project/report/
+gesture_auth_project/notes/
+gesture_auth_project/docs/
+gesture_auth_project/tools/
+gesture_auth_project/project_details.md
+claude.md
+CLAUDE.md
+# - third-party documents (copyrighted papers, another batch's report)
+gesture_auth_project/Reasearch papers/
+gesture_auth_project/sample_report/
+# - Word lock files
+~$*
+
 # Logs and local secrets
 *.log
 .env
