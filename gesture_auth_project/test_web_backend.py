@@ -34,7 +34,8 @@ SIM_WARMUP_SEC = 1.0      # a real camera's first frame is slow (MediaPipe / YuN
 # ------------------------------------------------------------------ simulated camera
 
 class SimSource:
-    """Dark frames labelled SIMULATED CAMERA, at SIM_FPS."""
+    """Frames labelled SIMULATED CAMERA, at SIM_FPS (SimSource.dark: very dark room)."""
+    dark = False
 
     def __init__(self, index, face_ops):
         if index == 9:
@@ -43,7 +44,7 @@ class SimSource:
 
     def read(self):
         time.sleep(1.0 / SIM_FPS)
-        frame = np.full((480, 640, 3), (34, 26, 20), np.uint8)
+        frame = np.full((480, 640, 3), (8, 6, 5) if SimSource.dark else (70, 62, 56), np.uint8)
         cv2.putText(frame, "SIMULATED CAMERA", (16, 464), cv2.FONT_HERSHEY_SIMPLEX,
                     0.55, (110, 120, 130), 1, cv2.LINE_AA)
         if self.face_ops.face_present:
@@ -477,6 +478,20 @@ def test_stream_waits_for_a_slow_first_frame():
                 chunk = resp.read(30000)
             assert JPEG_SOI in chunk, "stream ended before the first frame"
         finally:
+            app.close()
+
+
+def test_status_reports_brightness_for_lighting_hint():
+    with tw.TempDir() as tmp:
+        app = make_app(tmp)
+        try:
+            app.ok("POST", "/api/camera/start", {})
+            app.wait(lambda s: s["camera"]["brightness"] is not None, what="brightness")
+            assert app.ok("GET", "/api/status")["camera"]["brightness"] > 40
+            SimSource.dark = True
+            app.wait(lambda s: s["camera"]["brightness"] < 40, what="dark frames reported")
+        finally:
+            SimSource.dark = False
             app.close()
 
 

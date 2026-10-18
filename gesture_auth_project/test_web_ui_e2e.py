@@ -170,7 +170,7 @@ def run(debug):
 
         # ---------------- sign in: granted, then denied
         click(d, d.find_element(By.XPATH, "//a[contains(., 'Sign in now')]"))
-        wait_text(d, "Your hand is the")
+        wait_text(d, "Your hand is your password")
         val = d.find_element(By.ID, "username").get_attribute("value")
         if val != "alice":
             problems.append(f"[{tag}] sign-in username not prefilled: {val!r}")
@@ -191,9 +191,9 @@ def run(debug):
         d.find_element(By.TAG_NAME, "body").send_keys(" ")                # Space shortcut
         wait_text(d, "Access denied", 40)
         body = d.find_element(By.TAG_NAME, "body").text
-        if debug and "readings" not in body.lower():
-            problems.append("[dev] developer readings missing after denial")
-        if not debug and ("readings" in body.lower() or "DTW" in body or "cosine" in body.lower()):
+        if debug and "developer details" not in body.lower():
+            problems.append("[dev] developer details missing after denial")
+        if not debug and ("developer details" in body.lower() or "DTW" in body or "cosine" in body.lower()):
             problems.append("[normal] scores leaked into the protected sign-in screen")
         if not debug and "attempts left" not in body:
             problems.append("[normal] attempts-left message missing")
@@ -225,10 +225,11 @@ def run(debug):
         click(d, d.find_element(By.XPATH, "//button[contains(., 'Replace face')]"))
         wait_text(d, "Capture face")
         check_preview(d, f"{tag}/face-dialog")
-        d.find_element(By.XPATH, "//div[contains(@class,'sheet')]//button[contains(., 'Capture face')]").click()
+        WebDriverWait(d, 20).until(EC.element_to_be_clickable(
+            (By.XPATH, "//div[contains(@class,'modal')]//button[contains(., 'Capture face') and not(@disabled)]"))).click()
         wait_text(d, "Face enrolled", 30)
         shot(d, f"{tag}_22_face_dialog_done")
-        d.find_element(By.XPATH, "//div[contains(@class,'sheet')]//button[contains(., 'Close')]").click()
+        d.find_element(By.XPATH, "//div[contains(@class,'modal')]//button[contains(., 'Close')]").click()
         console_errors(d, tag)
     finally:
         d.quit()
@@ -239,7 +240,7 @@ def run(debug):
         for theme in ("dark", "light"):
             m.get(app.base + "/#/dashboard")
             set_theme(m, theme)
-            for page, text in (("dashboard", "Recent activity"), ("signin", "Your hand is the"),
+            for page, text in (("dashboard", "Recent activity"), ("signin", "Your hand is your password"),
                                ("register", "Create a profile"), ("users", "alice")):
                 m.get(app.base + f"/#/{page}")
                 wait_text(m, text)
@@ -260,7 +261,10 @@ for debug in (False, True):
         traceback.print_exc()
         st = CURRENT_APP.get("app")
         if st:
-            print("STATUS AT FAILURE:", json.dumps(st.ok("GET", "/api/status")["register"], default=str)[:800])
+            try:
+                print("STATUS AT FAILURE:", json.dumps(st.ok("GET", "/api/status")["register"], default=str)[:800])
+            except Exception:
+                pass                                   # server already closed
         problems.append(f"[{'dev' if debug else 'normal'}] FAILED: {type(e).__name__}: {e}")
 
 print("\nPROBLEMS:" if problems else "\nNo problems found.")
