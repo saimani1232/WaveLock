@@ -17,6 +17,7 @@ import numpy as np
 from utils.landmarks import extract_landmarks
 
 FACE_DETECT_INTERVAL_SEC = 0.25      # same throttle as gesture_auth.py's preview
+BRIGHTNESS_INTERVAL_SEC = 0.5        # UI lighting hint only; never used by a decision
 FACE_CAPTURE_TIMEOUT_SEC = 15.0
 JPEG_QUALITY = 72
 
@@ -162,6 +163,7 @@ class CameraService:
         self.face_bbox = None
         self.face_label = None            # (match, score, reason) in identity preview
         self.frame_aspect = None
+        self.brightness = None            # mean grey level 0-255 (lighting hint for the UI)
 
         self._jpeg = None
         self._frame_id = 0
@@ -184,6 +186,7 @@ class CameraService:
             self.fps = 0.0
             self.read_ms = 0.0
             self.process_ms = 0.0
+            self.brightness = None
         with self._frame_cond:
             self._jpeg = None               # never serve a frame from a previous run
             self._thread = threading.Thread(target=self._run, args=(camera_index,),
@@ -268,6 +271,7 @@ class CameraService:
             "hand_visible": bool(self.hand_visible),
             "face_in_view": self.face_bbox is not None,
             "frame_aspect": self.frame_aspect,
+            "brightness": None if self.brightness is None else round(self.brightness),
         }
 
     def wait_jpeg(self, last_id, timeout=2.0):
@@ -303,6 +307,7 @@ class CameraService:
         # The state becomes "running" only when the first frame has been
         # processed and encoded (MediaPipe / YuNet warm up on that frame).
         last_face = 0.0
+        last_light = 0.0
         prev = time.time()
         try:
             while not self._stop.is_set():
@@ -342,6 +347,11 @@ class CameraService:
 
                 self.hand_visible = landmarks is not None
                 self.frame_aspect = w / h
+                if now - last_light >= BRIGHTNESS_INTERVAL_SEC:
+                    # 1/8-size grey copy: about 0.1 ms, so it costs no frame rate
+                    small = cv2.resize(clean, (w // 8, h // 8), interpolation=cv2.INTER_AREA)
+                    self.brightness = float(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).mean())
+                    last_light = now
                 if rec is not None:
                     self._feed_recording(rec, now, landmarks, clean, w / h)
 
@@ -418,7 +428,9 @@ class CameraService:
         x, y, w, h = bbox
         label = self.face_label
         if label is None:
-            color, text = _NEUTRAL, "Face in view"
+            # Protected mode: box only. The page shows "Face in view" as a
+            # readable chip; small burned-in text was unreadable on phones.
+            color, text = _NEUTRAL, None
         else:
             match, score, reason = label
             if match:
@@ -428,8 +440,9 @@ class CameraService:
             else:
                 color, text = _RED, f"[ALERT] impostor {score:.2f}"
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-        cv2.putText(frame, text, (x, max(18, y - 8)), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.48, color, 1, cv2.LINE_AA)
+        if text:                          # developer identity preview
+            cv2.putText(frame, text, (x, max(18, y - 8)), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.48, color, 1, cv2.LINE_AA)
 
     def _fail(self, message):
         with self._lock:
