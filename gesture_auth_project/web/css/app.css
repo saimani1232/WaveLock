@@ -327,9 +327,9 @@ svg { flex-shrink: 0; }
 /* scan ring: the frame edge fills clockwise while recording, then turns green / red */
 .camera .scan-ring { position: absolute; inset: 6px; z-index: 2; pointer-events: none; }
 .camera .scan-ring svg { width: 100%; height: 100%; overflow: visible; display: block; }
-.camera .scan-ring rect { fill: none; vector-effect: non-scaling-stroke; }
-.camera .ring-track { stroke: transparent; stroke-width: 4; }
-.camera .ring-bar { stroke: transparent; stroke-width: 4; stroke-linecap: round; transition: stroke-dashoffset .25s linear, stroke .3s; }
+.camera .scan-ring rect { fill: none; }
+.camera .ring-track { stroke: transparent; stroke-width: .65; }
+.camera .ring-bar { stroke: transparent; stroke-width: .65; stroke-linecap: round; transition: stroke-dashoffset .25s linear, stroke .3s; }
 .camera.recording .ring-track { stroke: rgba(255, 255, 255, .12); }
 .camera.recording .ring-bar { stroke: #fbbf24; filter: drop-shadow(0 0 6px rgba(251, 191, 36, .75)); }
 .camera.processing .ring-track { stroke: rgba(94, 234, 212, .4); animation: pulse 1.1s infinite; }
@@ -474,7 +474,7 @@ svg { flex-shrink: 0; }
 .decision.shake { animation: shake .45s var(--ease) both; }
 .d-icon.ring-icon { background: transparent !important; }
 .count-ring { position: relative; width: 46px; height: 46px; display: grid; place-items: center; }
-.count-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.decision .d-icon .count-ring svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .count-ring circle { fill: none; stroke-width: 3.5; }
 .count-ring .cr-track { stroke: var(--warn-soft); }
 .count-ring .cr-bar { stroke: var(--warn); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
