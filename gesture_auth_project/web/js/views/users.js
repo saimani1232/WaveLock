@@ -7,7 +7,7 @@ function faceDialog(app, user, onDone) {
   const dots = h("div", { class: "face-dots" });
   const status = h("p", { class: "small muted", "aria-live": "polite" },
     "Look straight at the camera in even light, then start the capture.");
-  const startBtn = h("button", { class: "btn primary", type: "button" }, icon("face"), "Capture face");
+  const startBtn = h("button", { class: "btn primary", type: "button", disabled: true }, icon("face"), "Capture face");
   let unsub = null, releasePoll = null, running = false, finished = false;
 
   const paintDots = (n, total) => {
@@ -48,6 +48,7 @@ function faceDialog(app, user, onDone) {
   releasePoll = app.needFastPoll();
   unsub = app.subscribe((st) => {
     cam.update(st.camera);
+    if (!running && !finished) startBtn.disabled = !cam.live;   // only with a live picture
     const f = st.face;
     if (!running || !f || f.username !== user.name) return;
     paintDots(f.progress, f.required);
@@ -55,15 +56,16 @@ function faceDialog(app, user, onDone) {
       running = false;
       finished = true;
       status.textContent = f.message;
-      cam.setMode("granted");
+      cam.setMode("granted", { title: "Face enrolled", sub: "Checked at every sign-in" });
       toast(`Face enrolled for ${user.name}.`, "ok");
     } else if (f.status === "failed") {
       running = false;
       startBtn.disabled = false;
       status.textContent = f.message;
-      cam.setMode("denied");
+      cam.setMode("denied", { title: "Capture failed", sub: "Try again in better light" });
     }
   });
+  cam.setCoach({ needFace: true, needHand: false, text: "Look straight at the camera" });
   cam.start(app);
   return dlg;
 }

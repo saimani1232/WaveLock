@@ -1,5 +1,6 @@
 import { api } from "../api.js";
 import { CameraPanel } from "../camera.js";
+import { handMark } from "../brand.js";
 import { h, icon, clear, toast, initials, notice, fmtSeconds, fmtNum, fill, add } from "../ui.js";
 
 const STAGES = [
@@ -68,6 +69,24 @@ function detailsCard(details, result) {
     h("p", { class: "tiny faint" }, `Multimodal display score ${fmtNum(details.multimodal_fused_score, 3)} (not used for the decision).`));
 }
 
+// Static markup (no user data): an animated padlock and a countdown ring.
+function lockIcon(open) {
+  const span = h("span", { class: `lock-anim ${open ? "opening" : ""}`, "aria-hidden": "true" });
+  span.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path class="shackle" d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>' +
+    '<rect x="4.5" y="10.5" width="15" height="10.5" rx="2.5"/><path d="M12 15v2"/></svg>';
+  return span;
+}
+
+function countdownRing(left, total) {
+  const span = h("span", { class: "count-ring", "aria-hidden": "true" });
+  const frac = total > 0 ? Math.max(0, Math.min(1, left / total)) : 0;
+  span.innerHTML = '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" class="cr-track"/>' +
+    `<circle cx="20" cy="20" r="16" class="cr-bar" pathLength="100" stroke-dasharray="100" stroke-dashoffset="${(100 * (1 - frac)).toFixed(1)}"/></svg>`;
+  add(span, h("b", null, String(Math.ceil(left))));
+  return span;
+}
+
 export default {
   id: "signin",
   navLabel: "Sign in",
@@ -79,6 +98,7 @@ export default {
   async mount(root, app, params) {
     let cam = null, unsub = null, releasePoll = null, lastKey = "", session = null, busy = false;
     let seenOnServer = false;   // ignore polls that started before this session existed
+    let lockTotal = 0;          // longest remaining lock seen, for the countdown ring
     const onKey = (e) => {
       if (!session || session.phase !== "ready") return;
       if (e.target.closest && e.target.closest("input, textarea, select, button")) return;
@@ -92,7 +112,7 @@ export default {
       if (cam) { cam.stop(); cam = null; }
       const input = h("input", {
         class: "input", id: "username", autocomplete: "off", spellcheck: "false",
-        placeholder: "e.g. saimani", value: prefill, "aria-describedby": "user-error",
+        placeholder: "Your username", value: prefill, "aria-describedby": "user-error",
       });
       const err = h("div", { class: "error-text", id: "user-error", role: "alert" }, error);
       const submit = h("button", { class: "btn primary lg block", type: "submit" }, "Continue", icon("arrowRight"));
@@ -118,9 +138,10 @@ export default {
       err, submit);
       fill(root, h("div", { class: "hero-auth" },
         h("div", { class: "card" },
-          h("img", { class: "hero-mark", src: "assets/logo.svg", alt: "" }),
-          h("h2", null, "Welcome back"),
-          h("p", { class: "muted" }, "Enter your username, then perform your gesture while facing the camera."),
+          h("div", { class: "hero-brand" }, handMark({ animated: true, className: "hero-hand" }),
+            h("div", null, h("p", { class: "eyebrow" }, "WaveLock sign-in"),
+              h("h2", null, "Your hand is your password."))),
+          h("p", { class: "muted" }, "Enter your username, then face the camera and perform the gesture only you know."),
           h("div", { class: "divider" }), form,
           h("div", { class: "feature-row" },
             h("div", { class: "feature" }, icon("face"), "Face anchor"),
@@ -136,6 +157,7 @@ export default {
 
     const record = async () => {
       if (busy) return;
+      if (!cam || !cam.live) { toast("The camera is not ready yet.", "warn"); return; }
       busy = true;
       try {
         await api.authRecord();
@@ -159,7 +181,7 @@ export default {
       cam = new CameraPanel({ showFace: state.face_enrolled, label: "Live camera for sign-in" });
       fill(root, h("div", { class: "split" },
         h("div", { class: "stack" }, cam.el,
-          h("div", { class: "row small muted" }, icon("info"),
+          h("p", { class: "hint-line" }, icon("info"),
             h("span", null, "Press ", h("span", { class: "kbd" }, "R"), " or ", h("span", { class: "kbd" }, "Space"),
               " to record. Keep your hand and face in the frame for the whole recording."))),
         h("div", { class: "stack" },
@@ -172,8 +194,10 @@ export default {
                   (state.face_enrolled ? "face anchor on" : "no face anchor (legacy profile)"))),
               h("button", { class: "btn sm ghost", type: "button", onclick: () => endSession(false) },
                 icon("logout"), "Switch user"))),
-          h("div", { class: "card stack" }, h("div", { class: "section-label" }, "Verification pipeline"), pipeline, action),
+          h("div", { class: "card stack" }, action,
+            h("div", { class: "section-label" }, "Verification pipeline"), pipeline),
           details)));
+      cam.setCoach({ needHand: true, needFace: state.face_enrolled, text: "Ready when you are" });
       cam.start(app);
       lastKey = "";
       render(state);
@@ -189,19 +213,27 @@ export default {
         if (s.phase === "result" && r) {
           if (key === "decision") return r.granted ? "pass" : "fail";
           if (r.too_few_frames) return "";
-          if (!d) return "done";                      // protected mode: no per-stage verdicts
+          // Protected mode reveals no per-stage verdict: the stages only say
+          // they were checked, and only the decision is coloured.
+          if (!d) return "checked";
           if (key === "face") return d.face.match ? "pass" : "fail";
           if (key === "gesture") return d.macro.passed ? "pass" : "fail";
           if (key === "hand") return d.hand.passed ? "pass" : "fail";
         }
         return "";
       };
-      fill(pipeline, STAGES.map((st) => {
+      fill(pipeline, STAGES.map((st, i) => {
         const cls = stateOf(st.key);
-        return h("div", { class: `stage ${cls}` },
-          h("span", { class: "stage-icon" }, icon(cls === "pass" || cls === "done" ? "check" : cls === "fail" ? "x" : st.icon)),
-          st.label);
+        const iconName = cls === "pass" ? "check" : cls === "fail" ? "x" : st.icon;
+        const note = { pass: "Passed", fail: "Failed", checked: "Checked", off: "Not enrolled", active: "Checking" }[cls] || "";
+        return h("div", { class: `stage ${cls}`, vars: { "--i": String(i) } },
+          h("span", { class: "stage-icon" }, icon(iconName)), st.label,
+          note ? h("span", { class: "stage-note" }, note) : null);
       }));
+      if (s.phase === "result" && r && !d && !r.too_few_frames) {
+        add(pipeline, h("p", { class: "pipeline-note" },
+          "Protected mode does not say which check failed, so an observer cannot tune an imitation."));
+      }
     };
 
     const renderAction = (s) => {
@@ -211,20 +243,23 @@ export default {
       if (s.error) add(action, notice("warn", "alert", s.error));
       if (s.phase === "ready") {
         if (s.locked_for > 0) {
+          lockTotal = Math.max(lockTotal, s.locked_for);
           add(action, h("div", { class: "decision warn" },
-            h("span", { class: "d-icon" }, icon("lock")),
+            h("span", { class: "d-icon ring-icon" }, countdownRing(s.locked_for, lockTotal)),
             h("div", null, h("h3", null, "Temporarily locked"),
               h("p", { class: "small muted" }, `Too many failed attempts. Try again in ${fmtSeconds(s.locked_for)}.`))));
         } else {
+          lockTotal = 0;
           add(action, h("ol", { class: "tips" },
             h("li", null, "Face the camera so your face is visible."),
             h("li", null, "Show your hand until “Hand detected” appears."),
             h("li", null, "Start recording and perform your gesture at your normal speed.")));
         }
         add(action, h("button", {
-          class: "btn primary lg block", type: "button", disabled: s.locked_for > 0, onclick: record,
-        }, icon("record"), "Start recording"));
-        cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked" : "Ready when you are" });
+          class: "btn primary lg block", type: "button",
+          disabled: s.locked_for > 0 || !(cam && cam.live), onclick: record,
+        }, icon("record"), cam && cam.live ? "Start recording" : "Waiting for the camera…"));
+        cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked: wait for the timer" : "Ready: press R to record" });
       } else if (s.phase === "recording") {
         add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("wave")),
           h("div", null, h("h3", null, "Perform your gesture now"),
@@ -241,18 +276,21 @@ export default {
             h("div", null, h("h3", null, "Hand not seen long enough"),
               h("p", { class: "small muted" }, `Only ${r.hand_frames} hand frames were captured. This attempt was not counted.`))));
         } else if (r.granted) {
-          add(action, h("div", { class: "decision ok" }, h("span", { class: "d-icon" }, icon("unlock")),
+          add(action, h("div", { class: "decision ok" }, h("span", { class: "d-icon" }, lockIcon(true)),
             h("div", null, h("h3", null, "Access granted"),
               h("p", { class: "small muted" }, `Welcome, ${s.username}. All checks agreed.`))));
         } else {
-          add(action, h("div", { class: "decision danger" }, h("span", { class: "d-icon" }, icon("lock")),
+          add(action, h("div", { class: "decision danger shake" }, h("span", { class: "d-icon" }, lockIcon(false)),
             h("div", null, h("h3", null, "Access denied"),
               h("p", { class: "small muted" }, r.locked_for > 0
                 ? `Too many failed attempts. Locked for ${fmtSeconds(r.locked_for)}.`
                 : app.debug ? "See the developer details below." :
                   `The checks did not agree. ${r.attempts_left} attempt${r.attempts_left === 1 ? "" : "s"} left before a temporary lock.`))));
         }
-        cam && cam.setMode(r.too_few_frames ? "idle" : r.granted ? "granted" : "denied");
+        if (r.too_few_frames) cam && cam.setMode("idle", { hint: "Keep your hand in view, then try again" });
+        else if (r.granted) cam && cam.setMode("granted", { title: "Access granted", sub: `Welcome, ${s.username}` });
+        else cam && cam.setMode("denied", { title: "Access denied",
+          sub: r.locked_for > 0 ? "Temporarily locked" : `${r.attempts_left} attempt${r.attempts_left === 1 ? "" : "s"} left` });
         add(action, h("div", { class: "row" },
           h("button", { class: "btn primary", type: "button", onclick: async () => {
             try { await api.authReset(); app.poll(); } catch (e) { toast(e.message, "danger"); }
@@ -275,7 +313,7 @@ export default {
       if (!s) { if (seenOnServer) showLanding(); return; }
       if (s.username !== session.username) return;
       seenOnServer = true;
-      const key = `${s.phase}|${s.attempt}|${s.error}|${Math.ceil(s.locked_for)}`;
+      const key = `${s.phase}|${s.attempt}|${s.error}|${Math.ceil(s.locked_for)}|${cam && cam.live}`;
       if (key !== lastKey) { lastKey = key; render(s); }
       if (s.phase === "recording" && s.recording && cam) cam.setProgress(s.recording);
     });

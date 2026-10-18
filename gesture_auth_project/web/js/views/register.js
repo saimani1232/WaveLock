@@ -87,7 +87,7 @@ export default {
     };
 
     const onKey = (e) => {
-      if (!reg || reg.step !== "gesture" || !reg.awaiting_record) return;
+      if (!reg || reg.step !== "gesture" || !reg.awaiting_record || !cam || !cam.live) return;
       if (e.target.closest && e.target.closest("input, textarea, select, button")) return;
       if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); act(api.registerRecord); }
     };
@@ -161,7 +161,8 @@ export default {
       const dots = h("div", { class: "face-dots", "aria-label": `${r.face_progress} of ${r.face_required} face frames` },
         Array.from({ length: r.face_required }, (_, i) => h("span", { class: i < r.face_progress ? "on" : "" })));
       const capturing = r.face_status === "capturing";
-      c.setMode("idle", { hint: capturing ? "Hold still…" : "Centre your face in the frame" });
+      c.setCoach({ needFace: true, needHand: false, text: capturing ? "Hold still…" : "Centre your face in the frame" });
+      c.setMode("idle");
       return h("div", { class: "split" }, c.el,
         h("div", { class: "card stack" },
           h("h2", null, "Face anchor"),
@@ -170,9 +171,10 @@ export default {
           r.face_status === "failed" ? notice("danger", "alert", r.message || "Face capture failed.") : null,
           r.replacing ? notice("info", "info", "Skipping keeps the face already enrolled for this user.") : null,
           h("div", { class: "row" },
-            h("button", { class: "btn primary", type: "button", disabled: capturing,
+            h("button", { class: "btn primary", type: "button", disabled: capturing || !c.live,
               onclick: () => act(api.registerFaceCapture) },
-            capturing ? h("span", { class: "spinner sm" }) : icon("face"), capturing ? "Capturing…" : "Capture face"),
+            capturing ? h("span", { class: "spinner sm" }) : icon("face"),
+            capturing ? "Capturing…" : c.live ? "Capture face" : "Waiting for the camera…"),
             h("button", { class: "btn ghost", type: "button", disabled: capturing,
               onclick: () => act(api.registerFaceSkip) }, "Skip (gesture only)"))));
     };
@@ -180,9 +182,11 @@ export default {
     const gestureStep = (r) => {
       const c = ensureCam(false);
       const recording = r.phase === "recording";
+      c.setCoach({ needHand: true, needFace: false,
+        text: r.awaiting_record ? `Ready: press R to record sample ${Math.min(r.current_sample, r.samples_required)}` : "Please wait" });
       if (recording) c.setMode("recording", r.recording || {});
       else if (r.phase === "checking") c.setMode("processing", { text: "Checking consistency…" });
-      else c.setMode("idle", { hint: r.awaiting_record ? "Show your hand, then record" : "Please wait" });
+      else c.setMode("idle");
       const samples = h("div", { class: "samples" }, Array.from({ length: r.samples_required }, (_, i) => {
         const n = i + 1;
         let cls = "";
@@ -201,10 +205,11 @@ export default {
           h("p", { class: "muted small" }, recording ? "Perform your gesture now." :
             r.phase === "checking" ? "Comparing this sample with the earlier ones…" :
               "Perform exactly the same gesture each time, at your natural speed."),
-          h("button", { class: "btn primary lg block", type: "button", disabled: !r.awaiting_record,
+          h("button", { class: "btn primary lg block", type: "button", disabled: !r.awaiting_record || !c.live,
             onclick: () => act(api.registerRecord) },
           recording ? h("span", { class: "spinner sm" }) : icon("record"),
-          recording ? "Recording…" : `Record sample ${Math.min(r.current_sample, r.samples_required)}`),
+          recording ? "Recording…" : !c.live ? "Waiting for the camera…"
+            : `Record sample ${Math.min(r.current_sample, r.samples_required)}`),
           h("div", { class: "row small muted" }, "Shortcut:", h("span", { class: "kbd" }, "R")),
           events.length ? h("div", { class: "event-log", "aria-live": "polite" }, events) : null));
     };
@@ -250,7 +255,7 @@ export default {
     const render = (r) => {
       reg = r;
       const key = JSON.stringify([r.step, r.status, r.face_status, r.face_progress, r.current_sample,
-        r.accepted, r.awaiting_record, r.phase, r.restarts, r.events.length, r.message]);
+        r.accepted, r.awaiting_record, r.phase, r.restarts, r.events.length, r.message, cam ? cam.live : false]);
       if (key === lastKey) {
         if (r.phase === "recording" && r.recording && cam) cam.setProgress(r.recording);
         return;

@@ -47,8 +47,10 @@ class App {
     const paint = () => {
       const dark = document.documentElement.getAttribute("data-theme") === "dark";
       fill(btn, icon(dark ? "sun" : "moon"));
-      btn.setAttribute("aria-label", dark ? "Switch to light mode" : "Switch to dark mode");
-      btn.title = dark ? "Light mode" : "Dark mode";
+      btn.setAttribute("role", "switch");
+      btn.setAttribute("aria-checked", String(dark));
+      btn.setAttribute("aria-label", "Dark mode");
+      btn.title = dark ? "Switch to light mode" : "Switch to dark mode";
     };
     btn.addEventListener("click", () => {
       const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";

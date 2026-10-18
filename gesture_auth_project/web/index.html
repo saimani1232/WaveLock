@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <title>WaveLock Console</title>
+  <title>WaveLock</title>
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/app.css">
   <script src="js/theme-init.js"></script>
@@ -18,7 +18,7 @@
         <img class="brand-mark" src="assets/logo.svg" alt="">
         <span class="brand-text">
           <span class="brand-name">WaveLock</span>
-          <span class="brand-sub">Multimodal biometric sign-in</span>
+          <span class="brand-sub">Your hand is your password</span>
         </span>
       </a>
       <nav class="nav" id="nav"></nav>
@@ -33,7 +33,7 @@
         </div>
         <div class="topbar-actions">
           <span class="pill" id="camera-pill" role="status" aria-live="polite"></span>
-          <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle light or dark mode"></button>
+          <button class="icon-btn" id="theme-toggle" type="button" role="switch" aria-checked="true" aria-label="Dark mode"></button>
         </div>
       </header>
       <main id="view" class="view" tabindex="-1"></main>
