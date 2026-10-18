@@ -26,11 +26,12 @@
   --border-strong: #2c3d56;
   --text: #e6edf6;
   --text-muted: #91a3ba;
-  --text-faint: #63758d;
+  --text-faint: #8494aa;        /* 5.5:1 on surface-2 */
   --accent: #2dd4bf;
   --accent-strong: #5eead4;
   --accent-ink: #03211d;
   --accent-soft: rgba(45, 212, 191, .12);
+  --accent-bright: #2dd4bf;
   --ok: #34d399;   --ok-soft: rgba(52, 211, 153, .13);
   --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .13);
   --danger: #f87171; --danger-soft: rgba(248, 113, 113, .13);
@@ -52,14 +53,15 @@
   --border-strong: #c9d3e0;
   --text: #0d1726;
   --text-muted: #4f5f76;
-  --text-faint: #7b889c;
-  --accent: #0d9488;
-  --accent-strong: #0f766e;
+  --text-faint: #5d6b80;        /* 4.9:1 on bg */
+  --accent: #0f766e;            /* 5.5:1 with white text */
+  --accent-strong: #115e59;
   --accent-ink: #ffffff;
   --accent-soft: rgba(13, 148, 136, .10);
+  --accent-bright: #14b8a6;      /* decorative only (glows, rings) */
   --ok: #047857;   --ok-soft: rgba(5, 150, 105, .11);
-  --warn: #b45309; --warn-soft: rgba(217, 119, 6, .12);
-  --danger: #c62828; --danger-soft: rgba(220, 38, 38, .10);
+  --warn: #92400e; --warn-soft: rgba(217, 119, 6, .12);
+  --danger: #b91c1c; --danger-soft: rgba(220, 38, 38, .10);
   --info: #1d4ed8; --info-soft: rgba(37, 99, 235, .10);
   --shadow: 0 1px 2px rgba(15, 23, 42, .05), 0 8px 24px rgba(15, 23, 42, .06);
   --shadow-pop: 0 18px 50px rgba(15, 23, 42, .18);
@@ -533,7 +535,9 @@ pre.output {
   .split { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 900px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+  /* one column; header row sized to its content (it used to stretch and
+     leave an empty band above the navigation on short pages) */
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; align-content: start; }
   .sidebar {
     position: sticky; top: 0; z-index: 20; height: auto; flex-direction: row; align-items: center;
     padding: 10px 16px; gap: 10px; border-right: 0; border-bottom: 1px solid var(--border);
