@@ -84,3 +84,10 @@ Fixed 2026-10-14: with a real webcam the preview stayed black although the chips
 | "Lost connection to the WaveLock server" | `web_app.py` was stopped; start it again; the page reconnects by itself. |
 | "A registration ... is in progress" | Open Register (it resumes the running registration) and continue or cancel it. |
 | Low frame rate (about 15 fps) | Normal on a laptop CPU: every frame runs MediaPipe Hands; the desktop programs do the same work. |
+
+## 8. Visual design (2026-10-18)
+
+- Brand: `js/brand.js` draws the mark from the 21 MediaPipe hand landmarks with a keyhole in the palm; `assets/logo.svg` is generated from the same geometry. No `style=""` attributes anywhere: the CSP (`style-src 'self'`) blocks them, so animation delays are set as CSS variables from script.
+- Camera panel (`js/camera.js`): picture hidden until a real frame; scan ring (SVG rect, `pathLength=100`) fills during recording and turns green / red; coaching hints from `hand_visible`, `face_in_view` and `brightness` (below 40 = low light); status chips under the picture; result banner inside it.
+- Protected mode never shows per-stage verdicts: stages read "Checked", only the decision is coloured.
+- Colour tokens meet WCAG AA (4.5:1) for text in both themes; all motion stops under `prefers-reduced-motion`.
