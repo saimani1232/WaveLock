@@ -404,6 +404,243 @@ def test_models_and_mediapipe_load():
         hands.close()
 
 
+# ------------------------------------------------- semester-2 fixes (2026-10)
+
+def rotate_raw(raw, deg):
+    """Rotate raw landmarks in the image plane around each frame's wrist,
+    in isotropic pixel units (x scaled by the frame aspect)."""
+    out = raw.copy()
+    th = np.radians(deg)
+    rot = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    for f in range(raw.shape[0]):
+        xy = raw[f, :, :2].copy()
+        xy[:, 0] *= ASPECT
+        xy = (xy - xy[0]) @ rot.T + xy[0]
+        xy[:, 0] /= ASPECT
+        out[f, :, :2] = xy
+    return out
+
+
+def register_aspect(tmp, username="alice", raws=None, face=None):
+    from utils.normalize import POSE_METHOD_ASPECT
+    raws = raws if raws is not None else genuine_set()
+    poses = [normalize_gesture(r, frame_aspect=ASPECT) for r in raws]
+    gc.save_registration(username, poses, templates_dir=tmp, raw_samples=raws,
+                         frame_aspect=ASPECT, face_embedding=face,
+                         pose_method=POSE_METHOD_ASPECT)
+    return gc.load_user_profile(username, templates_dir=tmp)
+
+
+def test_face_file_missing_or_corrupt_refuses_login():
+    # N1: an enrolled face that cannot be loaded must block login, not
+    # silently switch the user to gesture-only.
+    with TempDir() as tmp:
+        face = np.random.RandomState(3).randn(128).astype(np.float32)
+        face /= np.linalg.norm(face)
+        register(tmp, face=face)
+        path = os.path.join(tmp, "alice", "face_embedding.npy")
+        for damage in ("wrong_shape", "deleted"):
+            if damage == "wrong_shape":
+                np.save(path, np.zeros(64, np.float32))
+            else:
+                os.remove(path)
+            try:
+                gc.load_user_profile("alice", templates_dir=tmp)
+            except ValueError as e:
+                assert "enroll_face.py" in str(e), e
+            else:
+                raise AssertionError(f"login allowed with {damage} face file")
+    with TempDir() as tmp:                         # never enrolled: still fine
+        assert register(tmp)["face_embedding"] is None
+
+
+def test_aspect_pose_method_makes_anatomy_rotation_stable():
+    # N2: same hand tilted in the image. Legacy pose fails anatomy at 45 deg;
+    # the aspect-corrected pose stays within tolerance at every angle.
+    from utils.normalize import POSE_METHOD_ASPECT
+    from utils.anthropometrics import (calibrate_anthropometric_profile,
+                                       extract_gesture_anthropometric_signature,
+                                       compare_anthropometric_signatures)
+    raws = genuine_set()
+    probe = genuine_set(1, seed=77)[0]
+
+    def matches(aspect, deg):
+        prof = calibrate_anthropometric_profile(
+            [normalize_gesture(r, frame_aspect=aspect) for r in raws])
+        sig = extract_gesture_anthropometric_signature(
+            normalize_gesture(rotate_raw(probe, deg), frame_aspect=aspect))
+        return compare_anthropometric_signatures(sig, prof["baseline"], prof["tolerance"])
+
+    assert not matches(1.0, 45)[0], "legacy pose unexpectedly rotation-stable"
+    for deg in (0, 30, 45, 60, 90):
+        ok, _, d = matches(ASPECT, deg)
+        assert ok and d["mean_deviation"] < 0.02, (deg, d)
+
+    # End to end: an aspect profile authenticates its own genuine attempt.
+    import gesture_auth as ga
+    with TempDir() as tmp:
+        profile = register_aspect(tmp)
+        assert profile["pose_method"] == POSE_METHOD_ASPECT
+        res = ga.evaluate_attempt(list(genuine_set(1, seed=31)[0]), [], ASPECT, profile)
+        assert res["granted"], res["reason"]
+
+
+def test_face_needs_majority_of_sampled_frames():
+    # N3: one good frame out of six used to be enough.
+    from utils import face_auth
+    real = face_auth.verify_face
+
+    def run(pattern):              # pattern per sampled frame: None / True / False
+        seq = iter(pattern)
+
+        def fake(frame, emb, threshold=face_auth.SFACE_COSINE_THRESHOLD):
+            p = next(seq)
+            if p is None:
+                return False, 0.0, 0.0, None, "no_face_detected"
+            return (p, 0.70 if p else 0.20, 0.8 if p else 0.1, (0, 0, 9, 9),
+                    None if p else "impostor_face_identity")
+        face_auth.verify_face = fake
+        try:
+            return face_auth.verify_face_over_frames([None] * 90, np.ones(128, np.float32))
+        finally:
+            face_auth.verify_face = real
+
+    r = run([True, None, None, None, None, None])
+    assert not r["match"] and r["reason"] == "insufficient_face_frames", r
+    r = run([True, True, True, None, None, None])
+    assert r["match"], r
+    r = run([True, True, False, False, None, None])
+    assert not r["match"], r
+    assert "insufficient_face_frames" in gc.FACE_FAILURE_REASONS
+
+
+def test_registration_restarts_instead_of_accepting_outlier():
+    # N4: a sample that fails the quality gate 3 times is never accepted.
+    import io
+    import contextlib
+    from gesture_capture import collect_gesture_samples as _collect
+
+    def collect_gesture_samples(*a):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return _collect(*a)
+
+    def scripted(results):
+        calls = {"record": 0}
+        verdicts = iter(results)
+
+        def record(_n):
+            calls["record"] += 1
+            k = calls["record"]
+            return np.full((60, 21, 3), float(k)), np.full((70, 21, 3), float(k)), ASPECT
+
+        def validate(_sample, _accepted):
+            return next(verdicts), "scripted"
+        return record, validate
+
+    # Sample 3 fails three times -> whole set recorded again (records 6-10 kept).
+    record, validate = scripted([True, True, False, False, False] + [True] * 5)
+    samples, raws, aspect = collect_gesture_samples(record, validate)
+    assert [int(s[0, 0, 0]) for s in samples] == [6, 7, 8, 9, 10]
+    assert len(raws) == 5 and aspect == ASPECT
+    # Always inconsistent -> registration stops after the allowed restarts.
+    record, validate = scripted(([True, True, False, False, False]) * 3)
+    assert collect_gesture_samples(record, validate) is None
+    # User quits.
+    assert collect_gesture_samples(lambda n: None, lambda a, b: (True, "")) is None
+
+
+def test_attempt_lockout():
+    from utils import attempt_limit as al
+    with TempDir() as tmp:
+        t = 1000.0
+        for i in range(al.MAX_CONSECUTIVE_FAILURES - 1):
+            st = al.record_attempt("alice", False, tmp, reason="distance", now=t)
+            assert st["locked_for"] == 0 and st["attempts_left"] == al.MAX_CONSECUTIVE_FAILURES - 1 - i
+        st = al.record_attempt("alice", False, tmp, now=t)
+        assert st["locked_for"] == al.LOCKOUT_BASE_SEC
+        assert al.seconds_locked("alice", tmp, now=t + 1) == al.LOCKOUT_BASE_SEC - 1
+        assert al.seconds_locked("alice", tmp, now=t + al.LOCKOUT_BASE_SEC + 1) == 0
+        t += al.LOCKOUT_BASE_SEC + 1
+        for _ in range(al.MAX_CONSECUTIVE_FAILURES):
+            st = al.record_attempt("alice", False, tmp, now=t)
+        assert st["locked_for"] == 2 * al.LOCKOUT_BASE_SEC          # doubles
+        st = al.record_attempt("alice", True, tmp, now=t + 10_000)
+        assert st["consecutive_failures"] == 0 and st["lockouts"] == 0
+        assert al.seconds_locked("bob", tmp) == 0                   # per user
+        with open(os.path.join(tmp, ".attempts", "alice.log")) as f:
+            assert len(f.readlines()) == 2 * al.MAX_CONSECUTIVE_FAILURES + 1
+        with open(os.path.join(tmp, ".attempts", "alice.json"), "w") as f:
+            f.write("{broken")
+        assert al.seconds_locked("alice", tmp) > 0                  # fails closed
+        register(tmp)                         # the state folder is not a user
+        assert gc.list_registered_users(tmp) == ["alice"]
+
+
+def test_normal_mode_hides_scores():
+    import io
+    import contextlib
+    import gesture_auth as ga
+    with TempDir() as tmp:
+        profile = register(tmp)
+        good = ga.evaluate_attempt(list(genuine_set(1, seed=31)[0]), [], ASPECT, profile)
+        out = {}
+        for show in (False, True):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ga.print_result(good, False, show_scores=show)
+                ga.print_profile_summary(profile, show_scores=show)
+            out[show] = buf.getvalue()
+        assert "DTW" not in out[False] and "threshold" not in out[False].lower()
+        assert "DTW" in out[True]
+        cam = np.zeros((480, 640, 3), np.uint8)
+        for state in ("IDLE", "RECORDING", "GRANTED", "DENIED"):
+            img = ga.build_dashboard(
+                cam, state=state, username="alice", threshold=profile["threshold"],
+                face_info={"match": None, "score": 0.0, "fail": None,
+                           "enrolled": True, "detected": True},
+                result_info={"granted": state == "GRANTED", "fused_score": 0.9,
+                             "reason": "distance", "note": "Attempts left before lockout: 4"}
+                if state in ("GRANTED", "DENIED") else None,
+                show_scores=False)
+            assert img.shape == (ga.CANVAS_HEIGHT, ga.CANVAS_WIDTH, 3)
+
+
+def test_migration_rebuilds_profile_and_keeps_face():
+    import migrate_profiles as mp_
+    import gesture_auth as ga
+    from utils.normalize import POSE_METHOD_ASPECT
+    with TempDir() as tmp:
+        face = np.random.RandomState(5).randn(128).astype(np.float32)
+        face /= np.linalg.norm(face)
+        raws = genuine_set()
+        register(tmp, raws=raws, face=face)                      # legacy profile
+        before = sorted(os.listdir(os.path.join(tmp, "alice")))
+        r = mp_.migrate_user("alice", tmp, dry_run=True)
+        assert r["status"] == "would_migrate"
+        assert sorted(os.listdir(os.path.join(tmp, "alice"))) == before
+        assert "pose_method" not in gc._read_config("alice", tmp) or \
+            gc._read_config("alice", tmp)["pose_method"] != POSE_METHOD_ASPECT
+
+        r = mp_.migrate_user("alice", tmp)
+        assert r["status"] == "migrated" and os.path.isdir(r["backup"])
+        prof = gc.load_user_profile("alice", templates_dir=tmp)
+        assert prof["pose_method"] == POSE_METHOD_ASPECT
+        assert np.allclose(prof["face_embedding"], face)
+        for t, raw in zip(prof["templates"], raws):
+            assert np.allclose(t, normalize_gesture(raw, frame_aspect=ASPECT))
+        assert gc.list_registered_users(tmp) == ["alice"]          # backup hidden
+        # gesture stages only (no camera frames here for the face stage)
+        res = ga.evaluate_attempt(list(genuine_set(1, seed=31)[0]), [], ASPECT,
+                                  dict(prof, face_embedding=None))
+        assert res["granted"], res["reason"]
+        assert mp_.migrate_user("alice", tmp)["status"] == "already_current"
+
+        poses = [normalize_gesture(r) for r in raws]             # no raw kept
+        gc.save_registration("legacy", poses, templates_dir=tmp)
+        assert mp_.migrate_user("legacy", tmp)["status"] == "no_raw_recordings"
+
+
+
 ALL = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
 
 if __name__ == "__main__":

@@ -7,7 +7,12 @@ Runs real-time authentication by coupling:
   4. Multimodal Decision Fusion Engine
 
 Usage:
-    python gesture_auth.py
+    python gesture_auth.py [--user NAME] [--camera N] [--debug]
+
+By default only ACCESS GRANTED / DENIED is shown: per-gate scores would let
+an observer tune an imitation attempt by attempt. --debug shows them for
+development and demonstrations. Failed attempts are limited in both modes
+(utils/attempt_limit.py).
 """
 
 import time
@@ -17,9 +22,14 @@ import cv2
 import numpy as np
 
 from utils.landmarks import extract_landmarks, is_hand_detected
-from utils.normalize import normalize_gesture, extract_wrist_trajectory
+from utils.normalize import (
+    normalize_gesture,
+    extract_wrist_trajectory,
+    aspect_for_method,
+)
 from utils.kinematics import prepare_kinematic_sequence
 from gesture_compare import (
+    TEMPLATES_DIR,
     load_user_profile,
     normalize_username,
     authenticate_with_details,
@@ -27,6 +37,7 @@ from gesture_compare import (
     list_registered_users,
 )
 from utils.face_auth import (
+    detect_primary_face,
     verify_face,
     verify_face_over_frames,
     SFACE_COSINE_THRESHOLD,
@@ -40,6 +51,7 @@ from gesture_capture import (
     MIN_RECORDED_FRAMES,
 )
 from utils.camera_utils import print_camera_diagnostics
+from utils.attempt_limit import record_attempt, seconds_locked
 
 
 # ============================================================================
@@ -99,9 +111,13 @@ def draw_meter_bar(canvas, x, y, w, h, value, threshold=None, color=COLOR_GREEN)
 
 def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
                     num_templates=5, face_info=None, gesture_info=None,
-                    hand_info=None, result_info=None, recording_info=None):
+                    hand_info=None, result_info=None, recording_info=None,
+                    show_scores=True):
     """
     Compose the 980x560 Enterprise Split-View Biometric Dashboard.
+
+    show_scores=False (normal login) hides thresholds, cosine values, gate
+    scores and failure reasons; callers then pass no gesture/hand details.
     """
     canvas = np.full((CANVAS_HEIGHT, CANVAS_WIDTH, 3), COLOR_BG, dtype=np.uint8)
 
@@ -168,7 +184,9 @@ def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
     draw_card(canvas, sx, sy, sw, 58, "TARGET PROFILE")
     cv2.putText(canvas, f"User: {username}", (sx + 15, sy + 38),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.50, COLOR_TEXT_WHITE, 1, cv2.LINE_AA)
-    cv2.putText(canvas, f"Threshold: {threshold:.2f}  |  Enrolled: {num_templates} templates", (sx + 15, sy + 51),
+    profile_line = (f"Threshold: {threshold:.2f}  |  Enrolled: {num_templates} templates"
+                    if show_scores else f"Enrolled: {num_templates} templates")
+    cv2.putText(canvas, profile_line, (sx + 15, sy + 51),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.36, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
     sy += 64
 
@@ -182,6 +200,14 @@ def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
     if not f_enrolled:
         f_status = "DISABLED (Legacy Profile)"
         f_color = COLOR_TEXT_MUTED
+    elif not show_scores:
+        if state == "RECORDING":
+            f_status = "CHECKED DURING RECORDING"
+        elif face_info and face_info.get("detected"):
+            f_status = "FACE IN VIEW"
+        else:
+            f_status = "NO FACE IN VIEW"
+        f_color = COLOR_TEXT_MUTED
     elif f_match is True:
         f_status = f"VERIFIED (Cosine {f_score:.2f})"
         f_color = COLOR_GREEN
@@ -190,6 +216,9 @@ def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
         f_color = COLOR_AMBER
     elif f_fail == "no_face_detected":
         f_status = "REJECTED: NO FACE DETECTED"
+        f_color = COLOR_RED
+    elif f_fail == "insufficient_face_frames":
+        f_status = "REJECTED: FACE NOT IN VIEW LONG ENOUGH"
         f_color = COLOR_RED
     elif f_fail == "unstable_face_match":
         f_status = f"REJECTED: UNSTABLE MATCH ({f_score:.2f})"
@@ -207,14 +236,18 @@ def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
     cv2.putText(canvas, f_status, (sx + 15, sy + 38),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.40, f_color, 1, cv2.LINE_AA)
 
-    # Meter bar for Cosine Similarity: Normalized [-0.1, 0.8] to [0, 1]
-    norm_cosine = max(0.0, min(1.0, (f_score + 0.1) / 0.9))
-    norm_thresh = (SFACE_COSINE_THRESHOLD + 0.1) / 0.9
-    bar_col = f_color if f_enrolled else COLOR_BORDER
-    draw_meter_bar(canvas, sx + 15, sy + 48, sw - 30, 10, norm_cosine, norm_thresh, bar_col)
+    if show_scores:
+        # Meter bar for Cosine Similarity: Normalized [-0.1, 0.8] to [0, 1]
+        norm_cosine = max(0.0, min(1.0, (f_score + 0.1) / 0.9))
+        norm_thresh = (SFACE_COSINE_THRESHOLD + 0.1) / 0.9
+        bar_col = f_color if f_enrolled else COLOR_BORDER
+        draw_meter_bar(canvas, sx + 15, sy + 48, sw - 30, 10, norm_cosine, norm_thresh, bar_col)
 
-    cv2.putText(canvas, f"Req: {SFACE_COSINE_THRESHOLD:.3f} Cosine [Yellow Line] (Floor: {SFACE_LOOKALIKE_FLOOR:.3f})",
-                (sx + 15, sy + 76), cv2.FONT_HERSHEY_SIMPLEX, 0.33, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"Req: {SFACE_COSINE_THRESHOLD:.3f} Cosine [Yellow Line] (Floor: {SFACE_LOOKALIKE_FLOOR:.3f})",
+                    (sx + 15, sy + 76), cv2.FONT_HERSHEY_SIMPLEX, 0.33, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
+    else:
+        cv2.putText(canvas, "Scores hidden (developer mode: --debug)",
+                    (sx + 15, sy + 66), cv2.FONT_HERSHEY_SIMPLEX, 0.33, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
     sy += 98
 
     # Card 3: Stage 2 Gesture Password (h: 104)
@@ -283,11 +316,16 @@ def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
         cv2.putText(canvas, dec_text, (d_x, sy + 48),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0) if granted else (255, 255, 255), 2, cv2.LINE_AA)
 
-        cv2.putText(canvas, f"Fused Multi-Score: {fused:.1%}", (sx + 15, sy + 74),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_TEXT_WHITE, 1, cv2.LINE_AA)
-        if not granted and reason:
-            cv2.putText(canvas, f"Reason: {reason[:26]}", (sx + 15, sy + 88),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.33, COLOR_AMBER, 1, cv2.LINE_AA)
+        note = result_info.get("note")
+        if show_scores:
+            cv2.putText(canvas, f"Fused Multi-Score: {fused:.1%}", (sx + 15, sy + 74),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_TEXT_WHITE, 1, cv2.LINE_AA)
+            if not granted and reason:
+                cv2.putText(canvas, f"Reason: {reason[:26]}", (sx + 15, sy + 88),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.33, COLOR_AMBER, 1, cv2.LINE_AA)
+        elif note:
+            cv2.putText(canvas, note[:44], (sx + 15, sy + 78),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, COLOR_AMBER, 1, cv2.LINE_AA)
     else:
         cv2.putText(canvas, "Conjunctive Consensus Enforced", (sx + 15, sy + 42),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
@@ -344,7 +382,9 @@ def evaluate_attempt(recorded_frames, clean_frames, frame_aspect, profile):
         return result
 
     raw = np.asarray(recorded_frames, dtype=np.float64)
-    pose = normalize_gesture(raw, TARGET_FRAMES)
+    # Normalise the live attempt exactly like the stored templates.
+    pose_aspect = aspect_for_method(profile.get("pose_method"), frame_aspect)
+    pose = normalize_gesture(raw, TARGET_FRAMES, frame_aspect=pose_aspect)
 
     # Stage 1: face identity across the recording (median + majority vote).
     if profile["face_embedding"] is not None:
@@ -375,7 +415,8 @@ def evaluate_attempt(recorded_frames, clean_frames, frame_aspect, profile):
         live_trajectory=live_trajectory,
         stored_trajectories=profile["trajectory_templates"],
         trajectory_threshold=profile["trajectory_threshold"],
-        live_kinematic_sequence=prepare_kinematic_sequence(raw, TARGET_FRAMES),
+        live_kinematic_sequence=prepare_kinematic_sequence(
+            raw, TARGET_FRAMES, frame_aspect=pose_aspect),
     )
 
     result.update({
@@ -436,7 +477,7 @@ def hand_info_from_result(result):
     }
 
 
-def print_result(result, face_enrolled):
+def print_result(result, face_enrolled, show_scores=True):
     details = result["details"] or {}
     print()
     print("  =============================")
@@ -444,6 +485,8 @@ def print_result(result, face_enrolled):
     print("  =============================")
     if result["reason"] == "too_few_frames":
         print(f"  Too few hand frames ({result['frames']}). Keep your hand in view.")
+        return
+    if not show_scores:
         return
     print(f"  Confidence:      {details['fused_score'] * 100:.1f}%")
     if face_enrolled:
@@ -462,8 +505,15 @@ def print_result(result, face_enrolled):
     print(f"  Frames captured: {result['frames']}")
 
 
-def print_profile_summary(profile):
+def print_profile_summary(profile, show_scores=True):
     print(f"  Loaded {len(profile['templates'])} template(s) for '{profile['username']}'")
+    if not show_scores:
+        if profile["face_embedding"] is not None:
+            print("  Face Identity Layer:      [ACTIVE]")
+        else:
+            print("  Face Identity Layer:      [DISABLED] Legacy Mode (No face enrolled)")
+        return
+    print(f"  Pose method:              {profile.get('pose_method')}")
     print(f"  Authentication threshold: {profile['threshold']:.4f}")
     print(f"  Finger mismatch limit:    {profile['finger_state_threshold']:.4f}")
     print(f"  Transition order limit:   {profile['transition_threshold']:.4f}")
@@ -497,7 +547,11 @@ def main():
     parser.add_argument("--user", "-u", dest="opt_user", type=str, default=None, help="Username to authenticate")
     parser.add_argument("--camera", "--cam", "-c", dest="camera", type=int, default=None, help="Camera index (default: auto-detect)")
     parser.add_argument("--list-cams", action="store_true", help="List available cameras and exit")
+    parser.add_argument("--debug", action="store_true",
+                        help="Developer mode: show per-gate scores and reasons "
+                             "(helps an observer tune an imitation; not for real logins)")
     args = parser.parse_args()
+    show_scores = args.debug
 
     if args.list_cams:
         print_camera_diagnostics()
@@ -531,8 +585,15 @@ def main():
     except (FileNotFoundError, ValueError) as e:
         print(f"  ERROR: {e}")
         return
-    print_profile_summary(profile)
+    print_profile_summary(profile, show_scores)
     face_enrolled = profile["face_embedding"] is not None
+    if show_scores:
+        print("  [DEBUG] Developer mode: scores are visible on screen.")
+
+    locked_until = time.time() + seconds_locked(username, TEMPLATES_DIR)
+    if locked_until > time.time():
+        print(f"  [LOCKED] Too many failed attempts. Try again in "
+              f"{locked_until - time.time():.0f} s.")
 
     print()
     print("  Controls:")
@@ -563,7 +624,9 @@ def main():
         result_frame = None
 
         live_face = (None, 0.0, 1.0, None, None)   # match, score, conf, bbox, fail
+        live_face_bbox = None                       # normal mode: detection only
         last_face_check = 0.0
+        result_note = None
 
         while True:
             ret, frame = cap.read()
@@ -594,18 +657,28 @@ def main():
                 cv2.putText(display_cam, banner_text, (t_x, h // 2 - 20),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.2, b_col, 3, cv2.LINE_AA)
 
+                if show_scores:
+                    face_card = face_info_from_result(result, face_enrolled)
+                    gesture_card = gesture_info_from_result(result)
+                    hand_card = hand_info_from_result(result)
+                else:
+                    face_card = {"match": None, "score": 0.0, "fail": None,
+                                 "enrolled": face_enrolled, "detected": False}
+                    gesture_card = hand_card = None
                 dashboard = build_dashboard(
                     display_cam, state="GRANTED" if granted else "DENIED",
                     username=username, threshold=profile["threshold"],
                     num_templates=len(profile["templates"]),
-                    face_info=face_info_from_result(result, face_enrolled),
-                    gesture_info=gesture_info_from_result(result),
-                    hand_info=hand_info_from_result(result),
+                    face_info=face_card,
+                    gesture_info=gesture_card,
+                    hand_info=hand_card,
                     result_info={
                         "granted": granted,
                         "fused_score": result["fused_score"] or 0.0,
                         "reason": result["reason"],
+                        "note": result_note,
                     },
+                    show_scores=show_scores,
                 )
                 cv2.imshow(WINDOW_NAME, dashboard)
 
@@ -634,7 +707,20 @@ def main():
                     )
 
             # ─── Real-Time Facial Identity Tracking (Idle Mode) ───────
-            if not is_recording and face_enrolled:
+            # Normal mode only shows that a face is in view: a live match /
+            # impostor label would let an attacker tune a photo for free,
+            # without spending attempts.
+            if not is_recording and face_enrolled and not show_scores:
+                now = time.time()
+                if now - last_face_check >= FACE_PREVIEW_INTERVAL_SEC:
+                    live_face_bbox = detect_primary_face(clean_frame)[1]
+                    last_face_check = now
+                if live_face_bbox is not None:
+                    fx, fy, fw, fh = live_face_bbox
+                    cv2.rectangle(frame, (fx, fy), (fx + fw, fy + fh), COLOR_TEXT_MUTED, 2)
+                    cv2.putText(frame, "Face in view", (fx, max(20, fy - 8)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
+            elif not is_recording and face_enrolled:
                 now = time.time()
                 if now - last_face_check >= FACE_PREVIEW_INTERVAL_SEC:
                     live_face = verify_face(clean_frame, profile["face_embedding"])
@@ -680,7 +766,22 @@ def main():
                     )
                     recorded_frames = []
                     clean_frames_recorded = []
-                    print_result(result, face_enrolled)
+                    print_result(result, face_enrolled, show_scores)
+
+                    # Count every evaluated attempt (a recording with too few
+                    # hand frames was never evaluated, so it is not counted).
+                    result_note = None
+                    if result["reason"] != "too_few_frames":
+                        state = record_attempt(username, result["granted"], TEMPLATES_DIR,
+                                               reason=result["reason"])
+                        locked_until = time.time() + state["locked_for"]
+                        if state["locked_for"] > 0:
+                            result_note = f"Locked for {state['locked_for']:.0f} s"
+                            print(f"  [LOCKED] Too many failed attempts. Try again in "
+                                  f"{state['locked_for']:.0f} s.")
+                        elif not result["granted"]:
+                            result_note = f"Attempts left before lockout: {state['attempts_left']}"
+                            print(f"  {result_note}")
 
                     # ── Hardened Multimodal Template Aging ───
                     if result["granted"]:
@@ -704,11 +805,23 @@ def main():
                     print("  Press [T] to try again, [Q] to quit.")
                     show_result = True
 
+            # ─── Lockout banner ───────────────────────────────────────
+            lock_left = locked_until - time.time()
+            if lock_left > 0 and not is_recording:
+                cv2.rectangle(frame, (w // 2 - 170, 12), (w // 2 + 170, 42), (0, 0, 140), -1)
+                cv2.putText(frame, f"LOCKED - try again in {lock_left:.0f} s",
+                            (w // 2 - 150, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (255, 255, 255), 1, cv2.LINE_AA)
+
             # ─── Render Active Dashboard ──────────────────────────────
             cur_state = "RECORDING" if is_recording else "IDLE"
             if is_recording:
                 face_info_dict = {"match": None, "score": 0.0, "fail": None,
                                   "enrolled": face_enrolled}
+            elif not show_scores:
+                face_info_dict = {"match": None, "score": 0.0, "fail": None,
+                                  "enrolled": face_enrolled,
+                                  "detected": live_face_bbox is not None}
             else:
                 face_info_dict = {"match": live_face[0] if face_enrolled else None,
                                   "score": live_face[1], "fail": live_face[4],
@@ -720,6 +833,7 @@ def main():
                 gesture_info={"frames": len(recorded_frames)} if is_recording else None,
                 recording_info={"remaining": remaining, "progress": progress,
                                 "frames": len(recorded_frames)} if is_recording else None,
+                show_scores=show_scores,
             )
             cv2.imshow(WINDOW_NAME, dashboard)
 
@@ -727,7 +841,12 @@ def main():
             if key in (ord('q'), ord('Q')):
                 break
             elif key in (ord('r'), ord('R')) and not is_recording and not show_result:
-                if hand_visible:
+                # Re-read from disk: another window may have failed meanwhile.
+                lock_left = seconds_locked(username, TEMPLATES_DIR)
+                locked_until = time.time() + lock_left
+                if lock_left > 0:
+                    print(f"  [LOCKED] Try again in {lock_left:.0f} s.")
+                elif hand_visible:
                     is_recording = True
                     recording_start_time = time.time()
                     recorded_frames = []

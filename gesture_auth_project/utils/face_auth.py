@@ -192,10 +192,12 @@ def verify_face_over_frames(frames, enrolled_embedding, max_samples=6):
     """
     Verify identity across several frames of one authentication attempt.
 
-    Frames are sampled evenly. The attempt matches only if the MEDIAN cosine
-    clears the threshold AND a majority of frames with a detected face pass
-    individually, so one lucky frame cannot unlock and one occluded frame
-    cannot lock out.
+    Frames are sampled evenly. The attempt matches only if a face is found
+    in a majority of the SAMPLED frames, the MEDIAN cosine clears the
+    threshold, and a majority of the sampled frames pass individually. One
+    lucky frame cannot unlock (previously the majority was counted over the
+    frames that contained a face, so 1 good frame out of 6 was enough) and
+    one occluded frame cannot lock out.
 
     Returns:
         dict with match (bool), score (median cosine), confidence, reason
@@ -215,9 +217,15 @@ def verify_face_over_frames(frames, enrolled_embedding, max_samples=6):
                 "reason": "no_face_detected", "frames_checked": len(indices),
                 "faces_detected": 0}
 
+    required = (len(indices) + 1) // 2          # majority of sampled frames
     median_score = float(np.median([r[1] for r in detected]))
+    if len(detected) < required:
+        return {"match": False, "score": median_score, "confidence": 0.0,
+                "reason": "insufficient_face_frames",
+                "frames_checked": len(indices), "faces_detected": len(detected)}
+
     n_pass = sum(1 for r in detected if r[0])
-    majority = n_pass >= (len(detected) + 1) // 2
+    majority = n_pass >= required
     median_ok, confidence, tier_reason = classify_face_score(median_score)
     match = bool(majority and median_ok)
 

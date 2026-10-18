@@ -41,7 +41,12 @@ from utils.kinematics import (
     KINEMATIC_METHOD_SMOOTHED,
 )
 from utils.face_auth import load_face_embedding
-from utils.normalize import extract_wrist_trajectory
+from utils.normalize import (
+    extract_wrist_trajectory,
+    aspect_for_method,
+    POSE_METHOD_LEGACY,
+    POSE_METHOD_ASPECT,
+)
 
 
 # ============================================================================
@@ -163,6 +168,7 @@ TRAJECTORY_METHOD = "wrist_path_dtw_v1"
 # through verbatim; anything else is reported as an impostor face.
 FACE_FAILURE_REASONS = {
     "impostor_face_identity",
+    "insufficient_face_frames",
     "lookalike_sibling_detected",
     "no_face_detected",
     "unstable_face_match",
@@ -1082,7 +1088,7 @@ def load_user_anthropometric_profile(username, stored_templates=None,
 
 def load_user_kinematic_profile(username, stored_templates=None,
                                 templates_dir=TEMPLATES_DIR,
-                                raw_templates=None):
+                                raw_templates=None, frame_aspect=1.0):
     """
     Load the user's kinematic rhythm profile.
 
@@ -1097,7 +1103,8 @@ def load_user_kinematic_profile(username, stored_templates=None,
 
     if raw_templates:
         return calibrate_kinematic_profile(
-            [prepare_kinematic_sequence(r) for r in raw_templates],
+            [prepare_kinematic_sequence(r, frame_aspect=frame_aspect)
+             for r in raw_templates],
             method=KINEMATIC_METHOD_SMOOTHED,
         )
 
@@ -1157,12 +1164,26 @@ def load_user_profile(username, templates_dir=TEMPLATES_DIR):
 
     Raises:
         FileNotFoundError: user or templates missing.
-        ValueError: invalid username or corrupted config.json.
+        ValueError: invalid username, corrupted config.json, or a face
+            profile that is enrolled but cannot be loaded.
     """
     username = normalize_username(username)
     templates = load_all_user_templates(username, templates_dir)
     config = _read_config(username, templates_dir)
     raw_templates = load_user_raw_templates(username, len(templates), templates_dir)
+    pose_method = config.get("pose_method", POSE_METHOD_LEGACY)
+    pose_aspect = aspect_for_method(pose_method, config.get("frame_aspect"))
+
+    # Fail closed: a user whose face was enrolled must never be silently
+    # downgraded to gesture-only because the embedding file is missing or
+    # damaged (the old code then skipped the face check entirely).
+    face_embedding = load_face_embedding(username, templates_dir)
+    face_path = os.path.join(templates_dir, username, "face_embedding.npy")
+    if face_embedding is None and (config.get("face_enrolled") or os.path.exists(face_path)):
+        raise ValueError(
+            f"Face profile of '{username}' is missing or corrupted ({face_path}). "
+            f"Login refused. Re-enrol the face: python enroll_face.py --user {username}"
+        )
 
     trajectory_threshold = None
     trajectory_templates = None
@@ -1176,6 +1197,7 @@ def load_user_profile(username, templates_dir=TEMPLATES_DIR):
 
     return {
         "username": username,
+        "pose_method": pose_method,
         "templates": templates,
         "raw_templates": raw_templates,
         "threshold": load_user_threshold(username, templates_dir),
@@ -1186,12 +1208,12 @@ def load_user_profile(username, templates_dir=TEMPLATES_DIR):
             username, templates, templates_dir
         ),
         "kinematic_profile": load_user_kinematic_profile(
-            username, templates, templates_dir, raw_templates
+            username, templates, templates_dir, raw_templates, pose_aspect
         ),
         "trajectory_threshold": trajectory_threshold,
         "trajectory_templates": trajectory_templates,
         "frame_aspect": frame_aspect,
-        "face_embedding": load_face_embedding(username, templates_dir),
+        "face_embedding": face_embedding,
     }
 
 
@@ -1540,7 +1562,8 @@ def list_registered_users(templates_dir=TEMPLATES_DIR):
 # REGISTRATION SAVE FUNCTIONS
 # ============================================================================
 
-def build_profile_config(samples, raw_samples=None, frame_aspect=None):
+def build_profile_config(samples, raw_samples=None, frame_aspect=None,
+                         pose_method=POSE_METHOD_LEGACY):
     """
     Calibrate every threshold and biometric baseline from a template set.
 
@@ -1553,6 +1576,8 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None):
             aligned with samples. Enables the wrist-trajectory gate and the
             smoothed kinematic profile.
         frame_aspect: width / height of the camera frames used to record.
+        pose_method: how `samples` were normalised (POSE_METHOD_LEGACY or
+            POSE_METHOD_ASPECT); live attempts are normalised the same way.
 
     Returns:
         dict ready to be written to config.json (face_enrolled excluded).
@@ -1567,6 +1592,7 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None):
     segment_details = compute_segment_threshold_details(samples)
 
     config = {
+        "pose_method": pose_method,
         "threshold": round(threshold_details["threshold"], 4),
         "num_samples": len(samples),
         "threshold_method": threshold_details["method"],
@@ -1622,8 +1648,10 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None):
 
     if raw_samples is not None:
         aspect = float(frame_aspect) if frame_aspect else 1.0
+        pose_aspect = aspect_for_method(pose_method, aspect)
         config["kinematic_profile"] = calibrate_kinematic_profile(
-            [prepare_kinematic_sequence(r) for r in raw_samples],
+            [prepare_kinematic_sequence(r, frame_aspect=pose_aspect)
+             for r in raw_samples],
             method=KINEMATIC_METHOD_SMOOTHED,
         )
         config["frame_aspect"] = round(aspect, 6)
@@ -1646,7 +1674,8 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None):
 
 def save_registration(username, samples, threshold=None, pairwise_distances=None,
                       templates_dir=TEMPLATES_DIR, raw_samples=None,
-                      frame_aspect=None, face_embedding=None):
+                      frame_aspect=None, face_embedding=None,
+                      pose_method=POSE_METHOD_LEGACY):
     """
     Atomically save a complete multi-sample registration to disk.
 
@@ -1668,6 +1697,7 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
         raw_samples: optional raw landmark recordings aligned with samples.
         frame_aspect: camera frame width / height used during recording.
         face_embedding: optional (128,) face embedding.
+        pose_method: how `samples` were normalised (see build_profile_config).
 
     Returns:
         str: Path to the user's template directory.
@@ -1676,7 +1706,7 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
     if not samples:
         raise ValueError("Cannot save a registration without samples.")
 
-    config = build_profile_config(samples, raw_samples, frame_aspect)
+    config = build_profile_config(samples, raw_samples, frame_aspect, pose_method)
 
     os.makedirs(templates_dir, exist_ok=True)
     user_dir = os.path.join(templates_dir, username)
@@ -1831,7 +1861,8 @@ def update_templates_if_high_confidence(
     config_path = os.path.join(user_dir, "config.json")
     old_config = _read_config(username, templates_dir)
     new_config = build_profile_config(
-        updated_templates, updated_raw, old_config.get("frame_aspect")
+        updated_templates, updated_raw, old_config.get("frame_aspect"),
+        old_config.get("pose_method", POSE_METHOD_LEGACY),
     )
 
     # Merge so unrelated keys survive, then write data before config.

@@ -25,21 +25,48 @@ import numpy as np
 from scipy.interpolate import interp1d
 
 
-def normalize_spatial(frame_landmarks):
+# Pose normalisation methods, stored as config.json["pose_method"].
+# MediaPipe x is a fraction of the frame WIDTH and y a fraction of the frame
+# HEIGHT, so on a 640x480 camera one unit of x is 1.33 units of y. The legacy
+# method ignored this, which made bone ratios, finger angles and the pose
+# itself change when the hand rotated in the image plane. The aspect method
+# first rescales x by width / height so x and y share one unit. z (a model
+# estimate of relative depth, only "roughly" on the scale of x) is left as
+# in the legacy method: in-plane rotation does not involve it, and on the
+# enrolment recordings scaling it as well gave no benefit.
+# Profiles without the key are legacy. Which method is better for genuine
+# acceptance is a semester-2 evaluation question (notes/results).
+POSE_METHOD_LEGACY = "wrist_unit_v1"
+POSE_METHOD_ASPECT = "aspect_x_wrist_unit_v2"
+
+
+def aspect_for_method(pose_method, frame_aspect):
+    """Aspect to pass to normalize_gesture() for a profile's pose method."""
+    if pose_method == POSE_METHOD_ASPECT and frame_aspect:
+        return float(frame_aspect)
+    return 1.0
+
+
+def normalize_spatial(frame_landmarks, frame_aspect=1.0):
     """
     Apply spatial normalization to a single frame of hand landmarks.
 
+    Step 0: Rescale x by frame_aspect (width / height) so x and y share
+            one unit (1.0 = legacy behaviour, no rescaling).
     Step 1: Translate so wrist (landmark 0) is at the origin.
     Step 2: Scale so the maximum distance from wrist equals 1.0.
 
     Args:
         frame_landmarks: numpy array of shape (21, 3) — one frame of
                          raw (x, y, z) coordinates for 21 landmarks.
+        frame_aspect: camera frame width / height.
 
     Returns:
         numpy array of shape (21, 3) — normalized coordinates.
     """
-    normalized = frame_landmarks.copy()
+    normalized = np.array(frame_landmarks, dtype=np.float64, copy=True)
+    if frame_aspect != 1.0:
+        normalized[:, 0] *= frame_aspect
 
     # Step 1: Translate — place wrist at origin
     wrist = normalized[0].copy()
@@ -110,7 +137,7 @@ def normalize_temporal(gesture_sequence, target_length=60):
     return resampled
 
 
-def normalize_gesture(gesture_sequence, target_length=60):
+def normalize_gesture(gesture_sequence, target_length=60, frame_aspect=1.0):
     """
     Full normalization pipeline for a recorded gesture sequence.
 
@@ -125,6 +152,8 @@ def normalize_gesture(gesture_sequence, target_length=60):
                           recorded landmark data from MediaPipe.
         target_length: int, desired number of output frames.
                        Default is 60.
+        frame_aspect: camera frame width / height; 1.0 keeps the legacy
+                      method (see POSE_METHOD_ASPECT).
 
     Returns:
         Fully normalized numpy array of shape (target_length, 21, 3).
@@ -146,7 +175,7 @@ def normalize_gesture(gesture_sequence, target_length=60):
 
     # Step 1: Spatial normalization — per frame
     spatially_normalized = np.array([
-        normalize_spatial(frame) for frame in gesture_sequence
+        normalize_spatial(frame, frame_aspect) for frame in gesture_sequence
     ])
 
     # Step 2: Temporal normalization — across frames

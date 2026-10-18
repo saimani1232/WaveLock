@@ -238,7 +238,8 @@ gesture_auth_project/
 python gesture_capture.py
 ```
 1. **Stage 1 (Face Enrollment)**: Look into the camera. Press **[SPACE]** when your face is detected. Captures a 5-frame burst and saves `face_embedding.npy`. *(Press `[S]` to skip if running in legacy gesture-only mode)*.
-2. **Stage 2 (Gesture Enrollment)**: Perform your gesture **5 times**. The interactive quality gate automatically rejects irregular samples.
+2. **Stage 2 (Gesture Enrollment)**: Perform your gesture **5 times**. The interactive quality gate rejects irregular samples. A sample that fails 3 times is not accepted: the whole set is recorded again (at most 2 restarts, then registration stops and any existing profile is kept).
+3. **Pose method (semester 2, optional)**: `python gesture_capture.py --pose-method aspect` registers with the aspect-corrected pose (x rescaled by frame width / height, so hand ratios no longer change when the hand tilts). `legacy` stays the default until the real-user evaluation decides. Existing profiles can be rebuilt from their raw recordings with `python migrate_profiles.py --dry-run` (preview) and `python migrate_profiles.py [--user NAME]` (writes; old profile copied to `templates/.backup_<user>_<time>/`).
 
 ### 2. Fast Face-Only Enrollment (Existing Accounts)
 To enroll or update face verification for an existing account without re-recording gestures:
@@ -248,14 +249,30 @@ python enroll_face.py --user saimani
 
 ### 3. Authenticate
 ```bash
-python gesture_auth.py
+python gesture_auth.py            # normal login: only ACCESS GRANTED / DENIED is shown
+python gesture_auth.py --debug    # developer / demo mode: per-gate scores and reasons
 ```
-1. **Idle Mode Preview**: Look at the camera.
+1. **Idle Mode Preview**: Look at the camera. Normal mode shows a grey "Face in view" box only. With `--debug`:
    - **Green Box**: Your face is recognized (`[MATCH] saimani (94%)`).
    - **Amber Box**: Lookalike sibling detected (`[ALERT] Sibling / Lookalike`).
    - **Red Box**: Unknown / Impostor face.
-2. **Perform Gesture**: Press **[R]** and perform your gesture.
-3. **On-Screen Result**: Displays full multimodal confidence, per-gate metrics, and live access decision.
+2. **Perform Gesture**: Press **[R]** and perform your gesture. The face must be found in most of the sampled frames.
+3. **On-Screen Result**: Normal mode shows the decision and the attempts left. `--debug` also shows multimodal confidence and per-gate metrics (these would let an observer tune an imitation, so they are hidden by default).
+4. **Attempt limit**: after 5 failed attempts in a row the account is locked for 30 s, doubling with each further lockout (maximum 15 min); a granted login resets it. State and an attempt log are kept in `templates/.attempts/`.
+5. **Damaged face profile**: if a user has a face enrolled but `face_embedding.npy` is missing or damaged, login is refused (re-enrol with `enroll_face.py`) instead of silently skipping the face check.
+
+### Web UI (semester 2)
+A browser front end for the same backend and the same `templates/` folder:
+```bash
+python web_app.py            # opens http://127.0.0.1:8765 (protected mode)
+python web_app.py --debug    # developer mode: per-gate scores, reasons, SIMULATED benchmarks
+python web_app.py --camera 1 --port 8800 --no-browser
+```
+- Pages: Dashboard, Sign in, Register (wizard: account, face anchor, 5 gesture samples, review), Users (enrol / replace face, re-register), Security (protections, known limits, sign-in log), Settings (light / dark / system theme, camera).
+- The Python process owns the webcam and runs the same MediaPipe / YuNet / SFace code as the desktop programs; the browser shows a live stream and sends commands. Decisions come from the existing functions (`evaluate_attempt`, `collect_gesture_samples`, `save_registration`, attempt limit, template aging).
+- Local only: listens on 127.0.0.1, refuses foreign hosts and cross-site requests, strict content security policy. No new Python dependency.
+- Tests without a webcam: `python test_web_backend.py` (HTTP API with a SIMULATED camera) and, optionally, `python test_web_ui_e2e.py` (headless Chrome; needs `pip install selenium`).
+- Architecture, API and security model: `gesture_auth_project/web/README.md`.
 
 ### 4. Camera Selection & Diagnostics
 WaveLock automatically auto-detects connected video devices and prioritizes external USB webcams (e.g. Logitech webcams) over integrated laptop cameras. You can also inspect and select cameras explicitly:

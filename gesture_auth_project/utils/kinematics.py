@@ -45,7 +45,7 @@ SMOOTHING_WINDOW_FRACTION = 0.15
 SMOOTHING_POLYORDER = 3
 
 
-def prepare_kinematic_sequence(raw_sequence, target_length=60):
+def prepare_kinematic_sequence(raw_sequence, target_length=60, frame_aspect=1.0):
     """
     Build the sequence used for kinematic features from RAW landmarks.
 
@@ -56,6 +56,8 @@ def prepare_kinematic_sequence(raw_sequence, target_length=60):
     Args:
         raw_sequence: raw MediaPipe landmarks, shape (N, 21, 3).
         target_length: frames after resampling.
+        frame_aspect: width / height; must match the profile's pose method
+            (utils.normalize.aspect_for_method).
 
     Returns:
         numpy array of shape (target_length, 21, 3).
@@ -66,7 +68,7 @@ def prepare_kinematic_sequence(raw_sequence, target_length=60):
             f"Expected raw landmarks of shape (N, 21, 3), got {raw.shape}."
         )
 
-    spatial = np.array([normalize_spatial(frame) for frame in raw])
+    spatial = np.array([normalize_spatial(frame, frame_aspect) for frame in raw])
     n_frames = spatial.shape[0]
     if n_frames < 2:
         return np.tile(spatial, (target_length, 1, 1))

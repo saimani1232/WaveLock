@@ -6,7 +6,11 @@ multiple times (5 samples) to capture natural variation. Automatically
 computes calibrated thresholds from the samples for reliable authentication.
 
 Usage:
-    python gesture_capture.py [--user NAME] [--camera N]
+    python gesture_capture.py [--user NAME] [--camera N] [--pose-method legacy|aspect]
+
+    --pose-method aspect registers with the aspect-corrected pose
+    (utils/normalize.py, POSE_METHOD_ASPECT); legacy is the default until the
+    semester-2 evaluation shows which is better.
 
 Flow:
     1. Enter a username
@@ -31,7 +35,12 @@ import numpy as np
 import mediapipe as mp
 
 from utils.landmarks import extract_landmarks, is_hand_detected
-from utils.normalize import normalize_gesture
+from utils.normalize import (
+    normalize_gesture,
+    aspect_for_method,
+    POSE_METHOD_LEGACY,
+    POSE_METHOD_ASPECT,
+)
 from gesture_compare import (
     compute_dtw_distance,
     compute_finger_state_threshold_details,
@@ -68,6 +77,13 @@ from utils.camera_utils import (
 RECORDING_DURATION_SEC = 3    # Duration of each gesture recording
 TARGET_FRAMES = 60            # Frames after temporal normalization
 MIN_RECORDED_FRAMES = 10      # Fewer hand frames than this = failed recording
+
+# Quality gate policy. A sample that keeps failing the outlier check is never
+# accepted (that used to raise the DTW threshold, e.g. 2.00 -> 2.83 in a
+# synthetic test); instead the whole gesture set is recorded again, because
+# the earlier accepted samples may be the inconsistent ones.
+MAX_RETRIES_PER_SAMPLE = 3
+MAX_REGISTRATION_RESTARTS = 2
 
 # Resolve paths relative to this script's location
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -216,7 +232,8 @@ def setup_camera(camera_index=None):
 
 
 def record_one_sample(cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
-                      sample_num, total_samples, username):
+                      sample_num, total_samples, username,
+                      pose_method=POSE_METHOD_LEGACY):
     """
     Record a single gesture sample from the webcam.
 
@@ -307,8 +324,10 @@ def record_one_sample(cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
                 else:
                     # Normalize and return (raw kept for path + kinematics)
                     raw = np.array(recorded_frames, dtype=np.float64)
-                    normalized = normalize_gesture(raw, TARGET_FRAMES)
                     h, w = frame.shape[:2]
+                    normalized = normalize_gesture(
+                        raw, TARGET_FRAMES,
+                        frame_aspect=aspect_for_method(pose_method, w / h))
                     print(f"  [OK] Sample {sample_num}/{total_samples}: "
                           f"captured {len(recorded_frames)} frames")
                     return normalized, raw, w / h
@@ -411,6 +430,78 @@ def validate_sample_quality(new_sample, accepted_samples):
         f"Accepted: avg distance {avg_distance:.3f} within "
         f"limit {reject_limit:.3f}."
     )
+
+
+def collect_gesture_samples(record_fn, validate_fn=None,
+                            n_samples=NUM_REGISTRATION_SAMPLES,
+                            max_retries=MAX_RETRIES_PER_SAMPLE,
+                            max_restarts=MAX_REGISTRATION_RESTARTS):
+    """
+    Record n_samples consistent gesture samples.
+
+    Args:
+        record_fn: callable(sample_num) -> (pose, raw, frame_aspect), or None
+            when the user quits.
+        validate_fn: callable(pose, accepted_poses) -> (ok, message);
+            defaults to validate_sample_quality.
+
+    Returns:
+        (samples, raw_samples, frame_aspect), or None if the user quit or
+        the samples stayed inconsistent after max_restarts restarts.
+    """
+    if validate_fn is None:
+        validate_fn = validate_sample_quality
+    samples, raw_samples, frame_aspect = [], [], None
+    restarts = 0
+    sample_num = 1
+
+    while sample_num <= n_samples:
+        retries = 0
+        accepted = False
+        while not accepted and retries < max_retries:
+            print(f"  --- Sample {sample_num}/{n_samples} "
+                  f"--- Press [R] when ready ---")
+            recorded = record_fn(sample_num)
+            if recorded is None:
+                return None
+            sample, raw, aspect = recorded
+
+            # ── Quality Gate: check for outliers ──────────
+            is_ok, quality_msg = validate_fn(sample, samples)
+            if is_ok:
+                accepted = True
+                print(f"        ✓ Sample {sample_num} {quality_msg}")
+            else:
+                retries += 1
+                print(f"        ✗ Sample {sample_num} had irregular "
+                      f"motion ({retries}/{max_retries}).")
+                print(f"          ({quality_msg})")
+
+        if not accepted:
+            restarts += 1
+            if restarts > max_restarts:
+                print("  Registration stopped: the recordings stayed inconsistent.")
+                print("  Practise the gesture until it feels the same each time, then retry.")
+                return None
+            print(f"  ⚠ Sample {sample_num} could not be matched to the earlier ones.")
+            print(f"    Recording the whole set again (restart {restarts}/{max_restarts}).")
+            print()
+            samples, raw_samples, frame_aspect = [], [], None
+            sample_num = 1
+            continue
+
+        samples.append(sample)
+        raw_samples.append(raw)
+        if frame_aspect is None:
+            frame_aspect = aspect
+
+        # Brief pause message between samples (not on the last one)
+        if sample_num < n_samples:
+            print(f"        Ready for sample {sample_num + 1}/{n_samples}.")
+            print()
+        sample_num += 1
+
+    return samples, raw_samples, frame_aspect
 
 
 def capture_face_enrollment_phase(cap, username):
@@ -531,7 +622,10 @@ def main():
     parser.add_argument("--user", "-u", dest="opt_user", type=str, default=None, help="Username to register")
     parser.add_argument("--camera", "--cam", "-c", dest="camera", type=int, default=None, help="Camera index (default: auto-detect)")
     parser.add_argument("--list-cams", action="store_true", help="List available cameras and exit")
+    parser.add_argument("--pose-method", choices=("legacy", "aspect"), default="legacy",
+                        help="Pose normalisation: legacy (default) or aspect-corrected x")
     args = parser.parse_args()
+    pose_method = POSE_METHOD_ASPECT if args.pose_method == "aspect" else POSE_METHOD_LEGACY
 
     if args.list_cams:
         print_camera_diagnostics()
@@ -576,8 +670,6 @@ def main():
     # ─── Setup ────────────────────────────────────────────────────────
     hands, mp_hands, mp_drawing, mp_drawing_styles = setup_mediapipe()
     cap = None
-    samples, raw_samples, frame_aspect = [], [], None
-    max_retries_per_sample = 3  # prevent infinite re-record loops
 
     try:
         cap = setup_camera(camera_index=args.camera)
@@ -596,55 +688,16 @@ def main():
         print()
 
         # ─── Record multiple samples (with quality gate) ─────────────
-        sample_num = 1
-        while sample_num <= NUM_REGISTRATION_SAMPLES:
-            retries = 0
-            accepted = False
-
-            while not accepted:
-                print(f"  --- Sample {sample_num}/{NUM_REGISTRATION_SAMPLES} "
-                      f"--- Press [R] when ready ---")
-
-                recorded = record_one_sample(
-                    cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
-                    sample_num, NUM_REGISTRATION_SAMPLES, username
-                )
-
-                if recorded is None:
-                    print("  Registration cancelled. Existing profile (if any) is unchanged.")
-                    return
-                sample, raw, aspect = recorded
-
-                # ── Quality Gate: check for outliers ──────────
-                is_ok, quality_msg = validate_sample_quality(sample, samples)
-
-                if is_ok:
-                    accepted = True
-                    print(f"        ✓ Sample {sample_num} {quality_msg}")
-                else:
-                    retries += 1
-                    print(f"        ✗ Sample {sample_num} had irregular "
-                          f"motion. Let's re-record that one.")
-                    print(f"          ({quality_msg})")
-                    if retries >= max_retries_per_sample:
-                        # Accept after max retries to avoid blocking
-                        accepted = True
-                        print(f"        ⚠ Accepted after {retries} "
-                              f"retries (max retries reached).")
-
-                if accepted:
-                    samples.append(sample)
-                    raw_samples.append(raw)
-                    if frame_aspect is None:
-                        frame_aspect = aspect
-
-            # Brief pause message between samples (not on the last one)
-            if sample_num < NUM_REGISTRATION_SAMPLES:
-                print(f"        Ready for sample "
-                      f"{sample_num + 1}/{NUM_REGISTRATION_SAMPLES}.")
-                print()
-
-            sample_num += 1
+        collected = collect_gesture_samples(
+            lambda n: record_one_sample(
+                cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
+                n, NUM_REGISTRATION_SAMPLES, username, pose_method
+            )
+        )
+        if collected is None:
+            print("  Registration cancelled. Existing profile (if any) is unchanged.")
+            return
+        samples, raw_samples, frame_aspect = collected
 
     except KeyboardInterrupt:
         print("\n  Interrupted. Existing profile (if any) is unchanged.")
@@ -724,7 +777,7 @@ def main():
         user_dir = save_registration(
             username, samples, threshold, pairwise_distances,
             raw_samples=raw_samples, frame_aspect=frame_aspect,
-            face_embedding=face_embedding,
+            face_embedding=face_embedding, pose_method=pose_method,
         )
     except (OSError, ValueError) as e:
         print(f"  ERROR: Could not save registration: {e}")
