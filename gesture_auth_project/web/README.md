@@ -114,11 +114,13 @@ Rules (`useShortcuts` in `js/ui.js`): a key only works when its button is usable
 
 | Feature | Where | Behaviour |
 |---|---|---|
-| Liveness challenge | `utils/liveness.py`, `web_backend/camera.py`, `service.py` | Before every sign-in: show 1-4 fingers (thumb excluded, held 0.6 s), then turn the head left or right when a face is enrolled (otherwise a second finger count); 12 s limit. The face seen during the challenge must be the enrolled face. Failures count as failed attempts (`liveness_timeout_fingers`, `liveness_timeout_head_turn`, `liveness_face_mismatch`, `liveness_no_face`, `liveness_no_hand_for_gesture`). |
-| Get-ready lead-in | same | After a passed challenge, `GESTURE_LEAD_IN_SEC` (1.5 s) countdown ("get_ready" in `/api/status`) so the hand can move from the finger count to the gesture's start; then the recording starts when a hand is visible (up to 3 s). |
+| Liveness challenge | `utils/liveness.py`, `web_backend/camera.py`, `service.py` | Before every sign-in: show the requested number of fingers, 1-4 (all five fingers count; the thumb by its sideways reach beyond the index knuckle, > 0.40 palm widths), held 0.6 s, then turn the head left or right when a face is enrolled (otherwise a second finger count); 12 s limit. The most frontal face seen during the challenge must be the enrolled face. Failures count as failed attempts (`liveness_timeout_fingers`, `liveness_timeout_head_turn`, `liveness_face_mismatch`, `liveness_no_face`, `liveness_no_hand_for_gesture`). |
+| Start when ready | same | After a passed challenge the user starts the recording (R / Space / button, i.e. a second `/api/auth/record`) within `RECORD_READY_WINDOW_SEC` (20 s; `record_ready` in `/api/status`), as at registration. Not started in time: back to ready with `notice: ready_timeout`, not counted. |
 | Owner check | `utils/attempt_limit.py` | See section 3. |
 | Encryption at rest | `utils/secure_store.py` | New `.npy` files are encrypted with Windows DPAPI (this Windows account on this computer). Existing profiles: `python migrate_profiles.py --encrypt` / `--decrypt`. |
 | Template-aging anchor | `gesture_compare.update_templates_if_high_confidence` | An update must also match the templates as they were before the first update (`anchor_N.npy`); updates and refusals are logged in `config.json["aging_log"]`. |
 | Refused POSTs | `web_backend/server.py` | The request body is read before a 403 / 415 answer, so the client always receives it (no connection reset on Windows). |
+| Temporal trim | `gesture_compare.matching_recording` | New and recalibrated profiles (`temporal_trim`) ignore still frames at the start and end of a recording. |
+| Check level | `gesture_compare.CHECK_LEVELS` | Register, Check level: Relaxed leaves the movement-rhythm check out of the decision (Users shows it). |
 
 Limits: the liveness challenge is a presentation-attack countermeasure against photos and recorded video, not a proof of liveness; a live helper with the owner present, or a real-time deepfake that follows instructions, is not covered. It has been tested with simulated cameras only, not with real attack material.
