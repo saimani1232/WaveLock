@@ -1,8 +1,8 @@
 # WaveLock Web UI: architecture and integration plan
 
-Start: `python web_app.py` (opens http://127.0.0.1:8765). Options: `--port N`, `--camera N`, `--debug` (developer mode: per-gate scores), `--no-browser`.
+Start: `python web_app.py` (opens http://127.0.0.1:8765). Options: `--port N`, `--camera N`, `--debug` (developer mode: per-gate scores), `--no-browser`, `--no-liveness` (sign-in without the liveness challenge, for demonstrations).
 
-The desktop programs (`gesture_capture.py`, `gesture_auth.py`, `enroll_face.py`) keep working unchanged. The web UI is a second front end on the same backend code and the same `templates/` folder. No existing `.py` file was modified for it.
+The desktop programs (`gesture_capture.py`, `gesture_auth.py`, `enroll_face.py`) keep working. The web UI is a second front end on the same backend code and the same `templates/` folder. It was added without changing the desktop programs; the later semester-2 security features (section 10) changed both front ends in the same way.
 
 ## 1. Architecture
 
@@ -29,7 +29,7 @@ Why the backend owns the camera: hand landmarks must come from the same MediaPip
 
 - Workflows call the existing functions; decision logic is not re-implemented: `evaluate_attempt` (full multimodal decision), `collect_gesture_samples` + `validate_sample_quality` (quality gate and restart policy), `compute_*_threshold_details`, `extract_finger_transitions`, `validate_gesture_uniqueness`, `save_registration`, `save_face_embedding`, `set_face_enrolled_flag`, `update_templates_if_high_confidence`, `record_attempt` / `seconds_locked`.
 - Recording follows the CLI: starts only with a hand in view, lasts `RECORDING_DURATION_SEC`, needs `MIN_RECORDED_FRAMES` hand frames, keeps raw landmarks + clean frames (face check).
-- Face capture follows the CLI: 5 frames with a detected face, mean embedding, L2-normalised; saved together with the gesture profile at the end of registration.
+- Face capture follows the CLI: 5 frames with a detected face, at least `FACE_SAMPLE_GAP_SEC` (0.35 s) apart; `combine_face_embeddings` refuses the capture if two frames do not show the same person (cosine < 0.50), otherwise averages and L2-normalises; saved together with the gesture profile at the end of registration.
 - One activity at a time (sign-in, registration or face enrolment); the camera is shared.
 
 ## 3. Security model
@@ -39,7 +39,8 @@ Why the backend owns the camera: hand landmarks must come from the same MediaPip
 - Strict Content-Security-Policy (`'self'` only), `X-Content-Type-Options`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on API responses. Static files are served from `web/` only.
 - Normal mode returns only GRANTED / DENIED, attempts left and lockout time. Per-gate scores, cosines, thresholds and failure reasons are returned only when the server was started with `--debug`. The browser cannot switch this on.
 - Attempt limit and lockout are the same as the CLI (`utils/attempt_limit.py`), shared across both front ends.
-- Known limits (same as the CLI, not changed here): re-registering an existing username and re-enrolling a face require only a confirmation, not the owner's login. Anyone who can use the computer can use the UI.
+- Owner check (same as the CLI): re-registering an existing username or enrolling / replacing a face needs a granted sign-in of that user in the last 10 minutes (`utils/attempt_limit.verified_recently`); the verification is used up by the change. The page offers "Sign in as X" when the server answers `owner_signin_required`.
+- Known limit: anyone who can use the computer can register a new username and can use the UI.
 
 ## 4. Pages and workflows
 
@@ -67,7 +68,7 @@ test_web_backend.py        API tests with a simulated camera (no webcam needed)
 
 ## 6. Testing
 
-1. `python test_web_backend.py`: HTTP-level tests with a simulated camera that replays synthetic landmark sequences (security checks, registration, sign-in granted / denied, lockout, hidden scores, face enrolment).
+1. `python test_web_backend.py`: HTTP-level tests with a simulated camera that replays synthetic landmark sequences (security checks, registration, sign-in granted / denied, lockout, hidden scores, face enrolment, owner check, liveness challenge with a simulated user that answers it, get-ready lead-in).
 2. `python test_wavelock.py`: the existing backend self-tests must still pass.
 3. `node --check web/js/*.js`, then a headless Chrome run of the main workflows with screenshots in light and dark mode.
 
@@ -108,3 +109,16 @@ Single keys, shown as small badges on their buttons; **?** lists the ones availa
 | Anywhere | **?** shortcut list, **Esc** close a dialog |
 
 Rules (`useShortcuts` in `js/ui.js`): a key only works when its button is usable; nothing fires while typing in a text box, with Ctrl / Alt / Cmd held, while a dialog is open, or on key repeat; Space on a focused button is left to the browser.
+
+## 10. Semester-2 security features (2026-10-19)
+
+| Feature | Where | Behaviour |
+|---|---|---|
+| Liveness challenge | `utils/liveness.py`, `web_backend/camera.py`, `service.py` | Before every sign-in: show 1-4 fingers (thumb excluded, held 0.6 s), then turn the head left or right when a face is enrolled (otherwise a second finger count); 12 s limit. The face seen during the challenge must be the enrolled face. Failures count as failed attempts (`liveness_timeout_fingers`, `liveness_timeout_head_turn`, `liveness_face_mismatch`, `liveness_no_face`, `liveness_no_hand_for_gesture`). |
+| Get-ready lead-in | same | After a passed challenge, `GESTURE_LEAD_IN_SEC` (1.5 s) countdown ("get_ready" in `/api/status`) so the hand can move from the finger count to the gesture's start; then the recording starts when a hand is visible (up to 3 s). |
+| Owner check | `utils/attempt_limit.py` | See section 3. |
+| Encryption at rest | `utils/secure_store.py` | New `.npy` files are encrypted with Windows DPAPI (this Windows account on this computer). Existing profiles: `python migrate_profiles.py --encrypt` / `--decrypt`. |
+| Template-aging anchor | `gesture_compare.update_templates_if_high_confidence` | An update must also match the templates as they were before the first update (`anchor_N.npy`); updates and refusals are logged in `config.json["aging_log"]`. |
+| Refused POSTs | `web_backend/server.py` | The request body is read before a 403 / 415 answer, so the client always receives it (no connection reset on Windows). |
+
+Limits: the liveness challenge is a presentation-attack countermeasure against photos and recorded video, not a proof of liveness; a live helper with the owner present, or a real-time deepfake that follows instructions, is not covered. It has been tested with simulated cameras only, not with real attack material.

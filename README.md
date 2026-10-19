@@ -155,6 +155,7 @@ Even if an observer watches your gesture and copies the exact sequence:
 - **Hardened Adaptive Template Aging**:
   - Automatically updates the oldest stored gesture template on natural biomechanical drift.
   - **Anti-Poisoning Guard**: requires face match with face confidence ≥ 0.70 (mapped scale ≈ cosine 0.59), hand-anatomy confidence ≥ 0.85, kinematic confidence ≥ 0.65 and DTW ≤ 0.70·θ_DTW. Templates, raw recordings and `config.json` are updated together via atomic writes, and the running session reloads the whole profile afterwards.
+  - **Drift anchor (semester 2)**: an update must also be within the DTW threshold of the templates as they were before the first update (`anchor_N.npy`, written at the first update), so many small updates cannot move the profile away from the enrolled gesture. Updates and refusals are logged in `config.json["aging_log"]` (last 20).
 
 ---
 
@@ -237,7 +238,8 @@ gesture_auth_project/
 ```bash
 python gesture_capture.py
 ```
-1. **Stage 1 (Face Enrollment)**: Look into the camera. Press **[SPACE]** when your face is detected. Captures a 5-frame burst and saves `face_embedding.npy`. *(Press `[S]` to skip if running in legacy gesture-only mode)*.
+1. **Stage 1 (Face Enrollment)**: Look into the camera. Press **[SPACE]** when your face is detected. Captures 5 frames at least 0.35 s apart (move your head slightly); the capture is refused if the frames do not all show the same person; saves `face_embedding.npy`. *(Press `[S]` to skip if running in legacy gesture-only mode)*.
+   - Re-registering an **existing** username (and `enroll_face.py` for an existing account) needs a granted sign-in of that user in the last 10 minutes.
 2. **Stage 2 (Gesture Enrollment)**: Perform your gesture **5 times**. The interactive quality gate rejects irregular samples. A sample that fails 3 times is not accepted: the whole set is recorded again (at most 2 restarts, then registration stops and any existing profile is kept).
 3. **Pose method (semester 2, optional)**: `python gesture_capture.py --pose-method aspect` registers with the aspect-corrected pose (x rescaled by frame width / height, so hand ratios no longer change when the hand tilts). `legacy` stays the default until the real-user evaluation decides. Existing profiles can be rebuilt from their raw recordings with `python migrate_profiles.py --dry-run` (preview) and `python migrate_profiles.py [--user NAME]` (writes; old profile copied to `templates/.backup_<user>_<time>/`).
 
@@ -256,10 +258,15 @@ python gesture_auth.py --debug    # developer / demo mode: per-gate scores and r
    - **Green Box**: Your face is recognized (`[MATCH] saimani (94%)`).
    - **Amber Box**: Lookalike sibling detected (`[ALERT] Sibling / Lookalike`).
    - **Red Box**: Unknown / Impostor face.
-2. **Perform Gesture**: Press **[R]** and perform your gesture. The face must be found in most of the sampled frames.
+2. **Liveness check, then the gesture**: Press **[R]**. Follow the instruction on the screen: show 1-4 fingers (thumb folded), then turn your head left or right (when a face is enrolled). After "Passed - get ready" (1.5 s) perform your gesture. The face seen during the check must be the enrolled face, and the face must be found in most of the sampled frames of the gesture. `--no-liveness` skips the check (demonstrations only).
 3. **On-Screen Result**: Normal mode shows the decision and the attempts left. `--debug` also shows multimodal confidence and per-gate metrics (these would let an observer tune an imitation, so they are hidden by default).
 4. **Attempt limit**: after 5 failed attempts in a row the account is locked for 30 s, doubling with each further lockout (maximum 15 min); a granted login resets it. State and an attempt log are kept in `templates/.attempts/`.
 5. **Damaged face profile**: if a user has a face enrolled but `face_embedding.npy` is missing or damaged, login is refused (re-enrol with `enroll_face.py`) instead of silently skipping the face check.
+6. **Usernames are not listed** on the login screen (only with `--debug`).
+
+### Stored profiles (semester 2)
+- New template, recording and face files are encrypted with Windows DPAPI (readable only by the same Windows account on the same computer). Existing profiles stay plain until converted: `python migrate_profiles.py --encrypt` (and `--decrypt` before moving profiles to another computer). `config.json` stays plain.
+- `python evaluate_real_recordings.py`: leave-one-out evaluation on the stored enrolment recordings (read-only).
 
 ### Web UI (semester 2)
 A browser front end for the same backend and the same `templates/` folder:
@@ -267,6 +274,7 @@ A browser front end for the same backend and the same `templates/` folder:
 python web_app.py            # opens http://127.0.0.1:8765 (protected mode)
 python web_app.py --debug    # developer mode: per-gate scores, reasons, SIMULATED benchmarks
 python web_app.py --camera 1 --port 8800 --no-browser
+python web_app.py --no-liveness  # sign-in without the liveness check (demonstrations only)
 ```
 - Pages: Dashboard, Sign in, Register (wizard: account, face anchor, 5 gesture samples, review), Users (enrol / replace face, re-register), Security (protections, known limits, sign-in log), Settings (light / dark / system theme, camera).
 - The Python process owns the webcam and runs the same MediaPipe / YuNet / SFace code as the desktop programs; the browser shows a live stream and sends commands. Decisions come from the existing functions (`evaluate_attempt`, `collect_gesture_samples`, `save_registration`, attempt limit, template aging).
