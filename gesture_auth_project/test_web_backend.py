@@ -112,11 +112,13 @@ class SimTracker:
 class SimFaceOps:
     def __init__(self):
         self.face_present = True
+        self.delay = 0.0                  # seconds per model call (slow laptop on battery)
         rng = np.random.RandomState(11)
         self.identity = rng.randn(128).astype(np.float32)
         self.identity /= np.linalg.norm(self.identity)
 
     def detect(self, frame):
+        time.sleep(self.delay)
         if not self.face_present:
             return None, None
         return np.zeros(15, np.float32), (270, 50, 110, 140)
@@ -125,6 +127,7 @@ class SimFaceOps:
         return self.identity + np.random.normal(0, 0.01, 128).astype(np.float32)
 
     def verify(self, frame, embedding):
+        time.sleep(2 * self.delay)        # real verify_face detects again + runs SFace
         score = float(np.dot(self.identity, embedding) / (np.linalg.norm(embedding) + 1e-9))
         match, conf, reason = classify_face_score(score)
         return match, score, conf, (270, 50, 110, 140), reason
@@ -479,6 +482,42 @@ def test_stream_waits_for_a_slow_first_frame():
             assert JPEG_SOI in chunk, "stream ended before the first frame"
         finally:
             app.close()
+
+
+def test_slow_face_models_do_not_starve_the_recording():
+    # Regression (2026-10-19): in developer mode with a face in view the camera
+    # thread ran YuNet + SFace itself, so on a slow (battery) CPU the preview
+    # fell to ~8 fps and a 3 s recording got too few, uneven hand frames.
+    import gesture_auth
+    real_check = gesture_auth.verify_face_over_frames
+    # The decision's face check runs the real models, which find no face in
+    # simulated frames; this test is about frame timing, so stand in a match.
+    gesture_auth.verify_face_over_frames = lambda frames, emb: {
+        "match": True, "score": 0.74, "confidence": 0.86, "reason": None,
+        "frames_checked": 6, "faces_detected": 6}
+    with tw.TempDir() as tmp:
+        app = make_app(tmp, debug=True)
+        try:
+            register_via_api(app, face=True)
+            app.face_ops.delay = 0.3                     # 300 ms detect, 600 ms verify
+            app.ok("POST", "/api/auth/begin", {"username": "alice"})
+            time.sleep(1.0)                               # identity preview running
+            first = app.camera._frame_id
+            time.sleep(2.0)
+            produced = (app.camera._frame_id - first) / 2.0   # frames per second, really delivered
+            assert produced > SIM_FPS * 0.5, f"preview starved by face models: {produced:.1f} frames/s"
+            app.tracker.play(tw.genuine_set(1, seed=31)[0])
+            app.ok("POST", "/api/auth/record")
+            st = app.wait(lambda s: s["auth"]["phase"] == "result", what="attempt done")
+            frames = st["auth"]["result"]["hand_frames"]
+            expected = SIM_FPS * FAST_RECORDING_SEC
+            # Nominal rate; a busy machine delivers less even without face work.
+            # Before the fix this was a handful of frames (one per face call).
+            assert frames > 0.5 * expected, f"recording got {frames} of ~{expected:.0f} frames"
+            assert st["auth"]["result"]["granted"], st["auth"]["result"]
+        finally:
+            app.close()
+            gesture_auth.verify_face_over_frames = real_check
 
 
 def test_status_reports_brightness_for_lighting_hint():

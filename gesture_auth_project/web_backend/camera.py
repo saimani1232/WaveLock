@@ -17,6 +17,7 @@ import numpy as np
 from utils.landmarks import extract_landmarks
 
 FACE_DETECT_INTERVAL_SEC = 0.25      # same throttle as gesture_auth.py's preview
+IDENTITY_INTERVAL_SEC = 0.5          # developer identity preview (detect + SFace)
 BRIGHTNESS_INTERVAL_SEC = 0.5        # UI lighting hint only; never used by a decision
 FACE_CAPTURE_TIMEOUT_SEC = 15.0
 JPEG_QUALITY = 72
@@ -159,6 +160,7 @@ class CameraService:
         # time spent waiting for the webcam vs. time spent processing.
         self.read_ms = 0.0
         self.process_ms = 0.0
+        self.face_ms = 0.0                # face thread: detection (+ SFace) per check
         self.hand_visible = False
         self.face_bbox = None
         self.face_label = None            # (match, score, reason) in identity preview
@@ -170,6 +172,13 @@ class CameraService:
         self._recording = None
         self._face_capture = None
         self._identity = None             # (embedding, username) for debug preview
+        # Latest clean frame for the face thread: the camera thread never waits
+        # for the face models (they took 150-350 ms per frame on battery and
+        # starved the gesture recording of frames).
+        self._face_cond = threading.Condition()
+        self._face_frame = None
+        self._face_frame_id = 0
+        self._face_thread = None
 
     # ---- lifecycle
     def start(self, camera_index=None):
@@ -186,6 +195,7 @@ class CameraService:
             self.fps = 0.0
             self.read_ms = 0.0
             self.process_ms = 0.0
+            self.face_ms = 0.0
             self.brightness = None
         with self._frame_cond:
             self._jpeg = None               # never serve a frame from a previous run
@@ -196,8 +206,14 @@ class CameraService:
     def stop(self):
         thread = self._thread
         self._stop.set()
+        with self._face_cond:
+            self._face_cond.notify_all()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=5.0)
+        face_thread = self._face_thread
+        if face_thread is not None and face_thread is not threading.current_thread():
+            face_thread.join(timeout=5.0)
+        self._face_thread = None
         with self._lock:
             self._thread = None
             if self.state != "error":
@@ -267,7 +283,8 @@ class CameraService:
             "camera_index": self.camera_index,
             "fps": round(self.fps, 1),
             "read_ms": round(self.read_ms, 1),        # waiting for the webcam
-            "process_ms": round(self.process_ms, 1),  # hands + face + JPEG
+            "process_ms": round(self.process_ms, 1),  # hands + JPEG (camera thread)
+            "face_ms": round(self.face_ms, 1),        # face thread, per check
             "hand_visible": bool(self.hand_visible),
             "face_in_view": self.face_bbox is not None,
             "frame_aspect": self.frame_aspect,
@@ -305,8 +322,10 @@ class CameraService:
             return
 
         # The state becomes "running" only when the first frame has been
-        # processed and encoded (MediaPipe / YuNet warm up on that frame).
-        last_face = 0.0
+        # processed and encoded (MediaPipe warms up on that frame).
+        self._face_thread = threading.Thread(target=self._face_loop, name="wavelock-face",
+                                             daemon=True)
+        self._face_thread.start()
         last_light = 0.0
         prev = time.time()
         try:
@@ -324,26 +343,11 @@ class CameraService:
                 now = time.time()
 
                 rec = self._recording
-                fcap = self._face_capture
-                face_row = None
-                if ((fcap is not None or now - last_face >= FACE_DETECT_INTERVAL_SEC)
-                        and FACE_LOCK.acquire(blocking=False)):
-                    try:
-                        face_row, bbox = self.face_ops.detect(clean)
-                        last_face = now
-                        self.face_bbox = bbox
-                        ident = self._identity
-                        if ident is not None and bbox is not None:
-                            match, score, _, _, reason = self.face_ops.verify(clean, ident[0])
-                            self.face_label = (bool(match), float(score), reason)
-                        else:
-                            self.face_label = None
-                        if fcap is not None:
-                            self._feed_face_capture(fcap, clean, face_row, now)
-                    finally:
-                        FACE_LOCK.release()
-                elif fcap is not None:
-                    self._check_face_timeout(fcap, now)
+                if rec is None:                       # face thread sleeps through recordings
+                    with self._face_cond:             # hand the frame over; never wait
+                        self._face_frame = clean
+                        self._face_frame_id += 1
+                        self._face_cond.notify_all()
 
                 self.hand_visible = landmarks is not None
                 self.frame_aspect = w / h
@@ -386,6 +390,63 @@ class CameraService:
                 self.hand_visible = False
             with self._frame_cond:
                 self._frame_cond.notify_all()
+
+    def _face_loop(self):
+        """
+        Face preview and face capture, off the camera thread.
+
+        While a gesture is being recorded nothing runs here (like the desktop
+        gesture_auth.py, which pauses its face preview while recording): the
+        recording gets every frame the camera delivers. The face decision of
+        a sign-in is not made here; it runs afterwards on the frames saved in
+        the recording (gesture_auth.evaluate_attempt).
+        """
+        seen_id = 0                       # newest frame this loop has looked at
+        last_face = last_ident = 0.0
+        while not self._stop.is_set():
+            with self._face_cond:
+                # Always sleep until a NEW frame arrives (or 0.25 s), so this
+                # thread never spins and takes CPU from the camera thread.
+                if self._face_frame_id == seen_id and not self._stop.is_set():
+                    self._face_cond.wait(0.25)
+                frame, frame_id = self._face_frame, self._face_frame_id
+            new_frame = frame_id != seen_id
+            seen_id = frame_id
+            fcap = self._face_capture
+            now = time.time()
+            if fcap is not None:
+                self._check_face_timeout(fcap, now)
+            if self._stop.is_set() or frame is None or not new_frame:
+                continue
+            if self._recording is not None:           # gesture recording: hands only
+                continue
+            if fcap is None and now - last_face < FACE_DETECT_INTERVAL_SEC:
+                continue
+            if not FACE_LOCK.acquire(blocking=False):  # a sign-in decision is using the models
+                time.sleep(0.05)
+                continue
+            t0 = time.perf_counter()
+            try:
+                face_row, bbox = self.face_ops.detect(frame)
+                last_face = now
+                self.face_bbox = bbox
+                ident = self._identity
+                if ident is None or bbox is None:
+                    self.face_label = None
+                elif now - last_ident >= IDENTITY_INTERVAL_SEC:
+                    match, score, _, _, reason = self.face_ops.verify(frame, ident[0])
+                    self.face_label = (bool(match), float(score), reason)
+                    last_ident = now
+                fcap = self._face_capture
+                if fcap is not None:
+                    self._feed_face_capture(fcap, frame, face_row, now)
+            except Exception:
+                self.face_bbox = None             # never let a face error stop the camera
+                self.face_label = None
+            finally:
+                FACE_LOCK.release()
+            ms = 1000.0 * (time.perf_counter() - t0)
+            self.face_ms = 0.8 * self.face_ms + 0.2 * ms if self.face_ms else ms
 
     def _feed_recording(self, rec, now, landmarks, clean, aspect):
         if rec.started is None:

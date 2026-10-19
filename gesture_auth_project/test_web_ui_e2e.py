@@ -36,6 +36,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import StaleElementReferenceException
 
 problems = []
 
@@ -156,7 +157,15 @@ def run(debug):
             if n == 2:
                 d.find_element(By.TAG_NAME, "body").send_keys("r")       # keyboard shortcut
             else:
-                click(d, btn)
+                # The page re-renders once when a sample finishes; if that
+                # replaced the button between finding and clicking, find it again.
+                for _attempt in range(5):
+                    try:
+                        click(d, btn)
+                        break
+                    except StaleElementReferenceException:
+                        btn = WebDriverWait(d, 20).until(EC.element_to_be_clickable(
+                            (By.XPATH, "//button[contains(., 'Record sample') and not(@disabled)]")))
             if n == 3:
                 time.sleep(0.45)
                 shot(d, f"{tag}_04_register_recording")
