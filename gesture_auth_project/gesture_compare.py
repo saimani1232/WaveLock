@@ -41,6 +41,7 @@ from utils.kinematics import (
     KINEMATIC_METHOD_SMOOTHED,
 )
 from utils.face_auth import load_face_embedding
+from utils.secure_store import save_array, load_array
 from utils.normalize import (
     extract_wrist_trajectory,
     aspect_for_method,
@@ -222,13 +223,13 @@ def _atomic_write_json(path, data):
 
 
 def _atomic_save_npy(path, array):
-    """np.save that never leaves a half-written file."""
+    """np.save that never leaves a half-written file (encrypted when DPAPI is available)."""
     fd, tmp_path = tempfile.mkstemp(
         dir=os.path.dirname(path), prefix=".tmp_", suffix=".npy"
     )
     try:
         with os.fdopen(fd, "wb") as f:
-            np.save(f, array)
+            save_array(f, array)
         os.replace(tmp_path, path)
     except BaseException:
         if os.path.exists(tmp_path):
@@ -892,7 +893,7 @@ def load_gesture_template(filepath):
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Gesture template not found: {filepath}")
 
-    template = np.load(filepath)
+    template = load_array(filepath)          # encrypted or plain
 
     if template.ndim != 3 or template.shape[1:] != (21, 3):
         raise ValueError(
@@ -1148,7 +1149,7 @@ def load_user_raw_templates(username, n_templates, templates_dir=TEMPLATES_DIR):
         path = os.path.join(user_dir, f"gesture_{i}_raw.npy")
         if not os.path.exists(path):
             return None
-        raw = np.load(path)
+        raw = load_array(path)
         if raw.ndim != 3 or raw.shape[1:] != (21, 3) or raw.shape[0] < 2:
             return None
         raws.append(raw)
@@ -1717,9 +1718,9 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
     os.makedirs(staging_dir)
     try:
         for i, sample in enumerate(samples, start=1):
-            np.save(os.path.join(staging_dir, f"gesture_{i}.npy"), sample)
+            save_array(os.path.join(staging_dir, f"gesture_{i}.npy"), sample)
             if raw_samples is not None:
-                np.save(
+                save_array(
                     os.path.join(staging_dir, f"gesture_{i}_raw.npy"),
                     np.asarray(raw_samples[i - 1], dtype=np.float64),
                 )
@@ -1727,8 +1728,8 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
         staged_face = os.path.join(staging_dir, "face_embedding.npy")
         old_face = os.path.join(user_dir, "face_embedding.npy")
         if face_embedding is not None:
-            np.save(staged_face,
-                    np.asarray(face_embedding, dtype=np.float32).reshape(128))
+            save_array(staged_face,
+                       np.asarray(face_embedding, dtype=np.float32).reshape(128))
         elif os.path.exists(old_face):
             shutil.copy2(old_face, staged_face)
 

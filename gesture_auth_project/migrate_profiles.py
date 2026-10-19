@@ -13,12 +13,21 @@ the legacy method until the user registers again.
 
 Usage:
     python migrate_profiles.py [--user NAME] [--dry-run] [--templates-dir DIR]
+
+Encryption at rest (utils/secure_store.py, Windows DPAPI):
+    python migrate_profiles.py --encrypt [--user NAME]   encrypt existing .npy files in place
+    python migrate_profiles.py --decrypt [--user NAME]   back to plain files (e.g. before moving
+                                                         the profiles to another computer)
+Every file is re-read and compared before it replaces the original. Encrypted
+files can only be read by this Windows account on this computer.
 """
 
 import os
 import sys
 import shutil
 import argparse
+
+import numpy as np
 from datetime import datetime
 
 from gesture_compare import (
@@ -33,6 +42,7 @@ from gesture_compare import (
 )
 from gesture_capture import TARGET_FRAMES
 from utils.normalize import normalize_gesture, POSE_METHOD_ASPECT, POSE_METHOD_LEGACY
+from utils import secure_store
 
 SHOWN_KEYS = ("threshold", "finger_state_threshold", "transition_threshold",
               "segment_threshold", "trajectory_threshold")
@@ -87,11 +97,42 @@ def migrate_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
     return report
 
 
+def profile_arrays(username, templates_dir=TEMPLATES_DIR):
+    """Every biometric .npy file of a profile (templates, raw recordings, face)."""
+    user_dir = os.path.join(templates_dir, normalize_username(username))
+    return sorted(os.path.join(user_dir, f) for f in os.listdir(user_dir)
+                  if f.endswith(".npy") and not f.startswith("."))
+
+
+def encrypt_user(username, templates_dir=TEMPLATES_DIR, decrypt=False):
+    """Encrypt (or decrypt) a profile's arrays in place. Returns files changed."""
+    if not decrypt and not secure_store.available():
+        raise ValueError("Windows DPAPI is not available on this system.")
+    changed = 0
+    for path in profile_arrays(username, templates_dir):
+        if decrypt:
+            if secure_store.is_encrypted(path):
+                array = secure_store.load_array(path)
+                tmp = path + ".tmp_plain"
+                secure_store.save_array(tmp, array, encrypt=False)
+                if not np.array_equal(secure_store.load_array(tmp), array):
+                    os.remove(tmp)
+                    raise ValueError(f"round-trip check failed for {path}")
+                os.replace(tmp, path)
+                changed += 1
+        elif secure_store.encrypt_file_in_place(path):
+            changed += 1
+    return changed
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Migrate WaveLock profiles to the aspect-corrected pose method")
     parser.add_argument("--user", "-u", default=None, help="Only this user (default: all)")
     parser.add_argument("--dry-run", action="store_true", help="Show the new thresholds without writing")
     parser.add_argument("--templates-dir", default=TEMPLATES_DIR, help="Templates root directory")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--encrypt", action="store_true", help="Encrypt the stored arrays (Windows DPAPI)")
+    mode.add_argument("--decrypt", action="store_true", help="Store the arrays as plain .npy again")
     args = parser.parse_args(argv)
 
     users = list_registered_users(args.templates_dir)
@@ -104,6 +145,20 @@ def main(argv=None):
     if not users:
         print(f"No registered users in {args.templates_dir}.")
         return 1
+
+    if args.encrypt or args.decrypt:
+        failed = 0
+        for user in users:
+            try:
+                n = 0 if args.dry_run else encrypt_user(user, args.templates_dir, decrypt=args.decrypt)
+            except (OSError, ValueError) as e:
+                failed += 1
+                print(f"  {user}: ERROR {e}")
+                continue
+            total = len(profile_arrays(user, args.templates_dir))
+            enc = sum(secure_store.is_encrypted(p) for p in profile_arrays(user, args.templates_dir))
+            print(f"  {user}: {n} file(s) changed; {enc}/{total} encrypted")
+        return 1 if failed else 0
 
     failed = 0
     for user in users:

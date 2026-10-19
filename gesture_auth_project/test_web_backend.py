@@ -20,6 +20,7 @@ import numpy as np
 import test_wavelock as tw
 import gesture_auth
 from utils import attempt_limit as al
+from utils.secure_store import load_array
 import web_backend.service as service_mod
 from utils.face_auth import classify_face_score
 from web_backend.camera import CameraService, CameraError
@@ -446,7 +447,7 @@ def test_face_enrolment_then_face_is_required():
             st = app.wait(lambda s: s["face"]["status"] != "capturing", what="face enrol")
             assert st["face"]["status"] == "done", st["face"]
             app.ok("POST", "/api/face/close")
-            stored = np.load(os.path.join(tmp, "alice", "face_embedding.npy"))
+            stored = load_array(os.path.join(tmp, "alice", "face_embedding.npy"))
             assert float(np.dot(stored, app.face_ops.identity)) > 0.99
             # the verification is used up by the change
             assert not al.verified_recently("alice", tmp)

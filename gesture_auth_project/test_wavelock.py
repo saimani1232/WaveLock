@@ -870,6 +870,47 @@ def test_desktop_signin_with_liveness():
         assert "Registered users" not in text          # names are not listed in normal mode
 
 
+def test_encrypted_template_storage():
+    import io
+    import contextlib
+    from utils import secure_store as ss
+    import migrate_profiles as mp_
+    if not ss.available():
+        print("    (DPAPI not available: plain storage only)")
+        return
+    with TempDir() as tmp:
+        face = np.random.RandomState(8).randn(128).astype(np.float32)
+        face /= np.linalg.norm(face)
+        profile = register(tmp, face=face)                      # new saves are encrypted
+        files = mp_.profile_arrays("alice", tmp)
+        assert len(files) == 11 and all(ss.is_encrypted(f) for f in files), files
+        assert np.allclose(profile["face_embedding"], face)
+        granted, _, _, d = attempt(profile, genuine_set(1, seed=777)[0])
+        assert granted, d["failure_reason"]
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert mp_.main(["--decrypt", "--templates-dir", tmp]) == 0
+        assert not any(ss.is_encrypted(f) for f in files)
+        plain = gc.load_user_profile("alice", templates_dir=tmp)  # plain files still load
+        assert all(np.array_equal(a, b) for a, b in zip(plain["templates"], profile["templates"]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert mp_.main(["--encrypt", "--templates-dir", tmp]) == 0
+        assert all(ss.is_encrypted(f) for f in files)
+        again = gc.load_user_profile("alice", templates_dir=tmp)
+        assert all(np.array_equal(a, b) for a, b in zip(again["raw_templates"], profile["raw_templates"]))
+
+        target = os.path.join(tmp, "alice", "gesture_2.npy")       # tampering is detected
+        blob = bytearray(open(target, "rb").read())
+        blob[60] ^= 0xFF
+        open(target, "wb").write(bytes(blob))
+        try:
+            gc.load_user_profile("alice", templates_dir=tmp)
+        except ValueError as e:
+            assert "decrypt" in str(e).lower(), e
+        else:
+            raise AssertionError("tampered template accepted")
+
+
 ALL = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
 
 if __name__ == "__main__":

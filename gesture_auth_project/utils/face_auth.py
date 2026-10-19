@@ -11,6 +11,8 @@ import tempfile
 import cv2
 import numpy as np
 
+from utils.secure_store import save_array, load_array
+
 # Model Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
@@ -250,7 +252,7 @@ def save_face_embedding(username, embedding, templates_dir):
     fd, tmp_path = tempfile.mkstemp(dir=user_dir, prefix=".tmp_", suffix=".npy")
     try:
         with os.fdopen(fd, "wb") as f:
-            np.save(f, np.asarray(embedding, dtype=np.float32).reshape(128))
+            save_array(f, np.asarray(embedding, dtype=np.float32).reshape(128))
         os.replace(tmp_path, out_path)
     except BaseException:
         if os.path.exists(tmp_path):
@@ -270,7 +272,7 @@ def load_face_embedding(username, templates_dir):
     face_path = os.path.join(user_dir, "face_embedding.npy")
     if os.path.exists(face_path):
         try:
-            emb = np.load(face_path)
+            emb = load_array(face_path)
             if emb.shape == (128,):
                 return emb.astype(np.float32)
         except Exception as e:
