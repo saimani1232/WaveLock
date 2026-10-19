@@ -113,6 +113,18 @@ class WaveLockHandler(BaseHTTPRequestHandler):
     def _error(self, status, message, code=None):
         self._json(status, {"error": message, "code": code})
 
+    def _refuse_post(self, status, message, code):
+        """Refuse a POST after reading its (bounded) body: closing a socket with
+        unread data resets the connection on Windows, and the client may then
+        lose the error response."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if 0 < length <= MAX_BODY_BYTES:
+            self.rfile.read(length)
+        return self._error(status, message, code)
+
     def _guard(self, api):
         """Return an error tuple when the request must be refused."""
         if self.headers.get("Host", "") not in self._allowed_hosts():
@@ -144,11 +156,11 @@ class WaveLockHandler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         refused = self._guard(True)
         if refused:
-            return self._error(*refused)
+            return self._refuse_post(*refused)
         if self.headers.get(CLIENT_HEADER) != "1":
-            return self._error(HTTPStatus.FORBIDDEN, "Missing client header.", "no_client_header")
+            return self._refuse_post(HTTPStatus.FORBIDDEN, "Missing client header.", "no_client_header")
         if not (self.headers.get("Content-Type", "").split(";")[0].strip() == "application/json"):
-            return self._error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Send JSON.", "content_type")
+            return self._refuse_post(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Send JSON.", "content_type")
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
