@@ -641,6 +641,28 @@ def test_migration_rebuilds_profile_and_keeps_face():
 
 
 
+def test_real_recording_evaluation_tool():
+    import io
+    import contextlib
+    import evaluate_real_recordings as ev
+    lo, hi = ev.clopper_pearson(0, 15)
+    assert lo == 0.0 and abs(hi - 21.8) < 0.1, hi            # value used in the report
+    assert ev.eer([0.9, 0.8, 0.7], [0.1, 0.2, 0.3])[0] == 0.0
+    assert ev.eer([0.5, 0.5], [0.5, 0.5])[0] == 50.0
+    with TempDir() as tmp:
+        register(tmp, "alice", raws=genuine_set(seed=100))
+        register(tmp, "bob", raws=genuine_set(seed=300, order=("pinky", "ring", "middle", "index")))
+        before = {f: os.path.getmtime(os.path.join(tmp, "alice", f)) for f in os.listdir(os.path.join(tmp, "alice"))}
+        with contextlib.redirect_stdout(io.StringIO()):
+            users, rows = ev.evaluate(["alice", "bob"], tmp)
+        s = ev.summarise(rows, users)
+        assert s["genuine"]["granted"]["n"] == 10 and s["impostor"]["granted"]["n"] == 10
+        assert s["genuine"]["granted"]["k"] >= 8, s["genuine"]
+        assert s["impostor"]["granted"]["k"] == 0 and s["impostor"]["dtw_knn"]["k"] == 0
+        after = {f: os.path.getmtime(os.path.join(tmp, "alice", f)) for f in os.listdir(os.path.join(tmp, "alice"))}
+        assert before == after, "evaluation must not write to the templates folder"
+
+
 ALL = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
 
 if __name__ == "__main__":
