@@ -644,7 +644,8 @@ def main():
         result_note = None
         liveness_on = not args.no_liveness
         challenge = None                            # utils.liveness.Challenge while answered
-        challenge_face = None                       # latest clean frame with a face
+        challenge_face = None                       # most frontal clean frame with a face
+        challenge_face_yaw = float("inf")           # its |yaw| (SFace scores turned faces low)
 
         while True:
             ret, frame = cap.read()
@@ -766,9 +767,10 @@ def main():
                         extract_landmarks(results.multi_hand_landmarks[0]) if hand_visible else None), now)
                     if face_enrolled:
                         face_row, _ = detect_primary_face(clean_frame)
-                        if face_row is not None:
-                            challenge_face = clean_frame
-                        challenge.feed_face(yaw_proxy(face_row), now)
+                        yaw = yaw_proxy(face_row)
+                        if yaw is not None and abs(yaw) <= challenge_face_yaw:
+                            challenge_face, challenge_face_yaw = clean_frame, abs(yaw)
+                        challenge.feed_face(yaw, now)
                     challenge.tick(now)
                 step = challenge.step if challenge.state == "running" else None
                 if step is not None:
@@ -946,7 +948,7 @@ def main():
                     print(f"  [LOCKED] Try again in {lock_left:.0f} s.")
                 elif liveness_on:
                     challenge = new_challenge(face_enrolled)
-                    challenge_face = None
+                    challenge_face, challenge_face_yaw = None, float("inf")
                     print("  [LIVE] Liveness check: follow the instruction on the screen.")
                 elif hand_visible:
                     is_recording = True

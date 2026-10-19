@@ -134,7 +134,10 @@ class ChallengeJob:
 
     def __init__(self, challenge):
         self.challenge = challenge
-        self.face_frame = None            # latest clean frame with a detected face
+        # Most frontal clean frame with a face (smallest |yaw|): it binds the
+        # challenge to the enrolled face, and SFace scores a turned face low.
+        self.face_frame = None
+        self.face_yaw = float("inf")
         self.error = None
         self.done = threading.Event()
 
@@ -475,9 +478,10 @@ class CameraService:
                     self._feed_face_capture(fcap, frame, face_row, now)
                 job = self._challenge
                 if job is not None:
-                    if face_row is not None:
-                        job.face_frame = frame
-                    job.challenge.feed_face(yaw_proxy(face_row), now)
+                    yaw = yaw_proxy(face_row)
+                    if yaw is not None and abs(yaw) <= job.face_yaw:
+                        job.face_frame, job.face_yaw = frame, abs(yaw)
+                    job.challenge.feed_face(yaw, now)
                     self._finish_challenge_if_done(job)
             except Exception:
                 self.face_bbox = None             # never let a face error stop the camera

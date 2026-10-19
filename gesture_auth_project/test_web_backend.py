@@ -7,6 +7,7 @@ service and decision code. The simulated parts live only in this file.
 """
 
 import json
+import collections
 import os
 import sys
 import threading
@@ -120,11 +121,13 @@ class SimFaceOps:
         rng = np.random.RandomState(11)
         self.identity = rng.randn(128).astype(np.float32)
         self.identity /= np.linalg.norm(self.identity)
+        self.seen = collections.deque(maxlen=200)   # (frame, yaw) of recent detections
 
     def detect(self, frame):
         time.sleep(self.delay)
         if not self.face_present:
             return None, None
+        self.seen.append((frame, self.yaw))
         return tw.face_row(self.yaw), (270, 50, 110, 140)
 
     def embed(self, frame, face_row):
@@ -133,6 +136,10 @@ class SimFaceOps:
     def verify(self, frame, embedding):
         time.sleep(2 * self.delay)        # real verify_face detects again + runs SFace
         score = float(np.dot(self.identity, embedding) / (np.linalg.norm(embedding) + 1e-9))
+        # like SFace, a clearly turned face scores far lower than a frontal one
+        yaw = next((y for f, y in reversed(self.seen) if f is frame), 0.0)
+        if abs(yaw) > 0.15:
+            score *= 0.4
         match, conf, reason = classify_face_score(score)
         return match, score, conf, (270, 50, 110, 140), reason
 
