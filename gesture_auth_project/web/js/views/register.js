@@ -1,6 +1,6 @@
 import { api } from "../api.js";
 import { CameraPanel } from "../camera.js";
-import { h, icon, clear, toast, notice, confirmDialog, fmtNum, poseLabel, fill } from "../ui.js";
+import { h, icon, clear, toast, notice, confirmDialog, fmtNum, poseLabel, fill, useShortcuts, kbdHint } from "../ui.js";
 
 const STEPS = [
   { key: "account", label: "Account" },
@@ -86,12 +86,30 @@ export default {
       showAccount();
     };
 
-    const onKey = (e) => {
-      if (!reg || reg.step !== "gesture" || !reg.awaiting_record || !cam || !cam.live) return;
-      if (e.target.closest && e.target.closest("input, textarea, select, button")) return;
-      if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); act(api.registerRecord); }
+    // Keyboard shortcuts that apply in the current step (see useShortcuts).
+    const shortcuts = () => {
+      const r = reg;
+      if (!r) return [];
+      const live = !!(cam && cam.live);
+      const list = [];
+      if (r.status === "active" && r.step === "face" && r.face_status !== "capturing") {
+        if (live) list.push({ keys: ["c"], label: "Capture face", run: () => act(api.registerFaceCapture) });
+        list.push({ keys: ["s"], label: "Skip the face (gesture only)", run: () => act(api.registerFaceSkip) });
+      }
+      if (r.status === "active" && r.step === "gesture" && r.awaiting_record && live) {
+        list.push({ keys: ["r", "space"], label: "Record the next sample", run: () => act(api.registerRecord) });
+      }
+      if (r.status === "active") {
+        list.push({ keys: ["escape"], label: "Cancel registration (asks first)", run: cancel });
+      } else if (r.status === "done" && r.summary) {
+        list.push({ keys: ["s"], label: "Sign in now", run: () => app.go(`signin?user=${encodeURIComponent(r.summary.username)}`) });
+        list.push({ keys: ["n"], label: "Register another user", run: cancel });
+      } else {
+        list.push({ keys: ["n"], label: "Start over", run: cancel });
+      }
+      return list;
     };
-    document.addEventListener("keydown", onKey);
+    const releaseKeys = useShortcuts(shortcuts);
 
     // ------------------------------------------------------------ step 1: account
     const showAccount = () => {
@@ -172,11 +190,13 @@ export default {
           r.replacing ? notice("info", "info", "Skipping keeps the face already enrolled for this user.") : null,
           h("div", { class: "row" },
             h("button", { class: "btn primary", type: "button", disabled: capturing || !c.live,
-              onclick: () => act(api.registerFaceCapture) },
+              "aria-keyshortcuts": "C", onclick: () => act(api.registerFaceCapture) },
             capturing ? h("span", { class: "spinner sm" }) : icon("face"),
-            capturing ? "Capturing…" : c.live ? "Capture face" : "Waiting for the camera…"),
+            capturing ? "Capturing…" : c.live ? "Capture face" : "Waiting for the camera…",
+            !capturing && c.live ? kbdHint("C") : null),
             h("button", { class: "btn ghost", type: "button", disabled: capturing,
-              onclick: () => act(api.registerFaceSkip) }, "Skip (gesture only)"))));
+              "aria-keyshortcuts": "S", onclick: () => act(api.registerFaceSkip) },
+            "Skip (gesture only)", capturing ? null : kbdHint("S")))));
     };
 
     const gestureStep = (r) => {
@@ -206,11 +226,14 @@ export default {
             r.phase === "checking" ? "Comparing this sample with the earlier ones…" :
               "Perform exactly the same gesture each time, at your natural speed."),
           h("button", { class: "btn primary lg block", type: "button", disabled: !r.awaiting_record || !c.live,
-            onclick: () => act(api.registerRecord) },
+            "aria-keyshortcuts": "R Space", onclick: () => act(api.registerRecord) },
           recording ? h("span", { class: "spinner sm" }) : icon("record"),
           recording ? "Recording…" : !c.live ? "Waiting for the camera…"
-            : `Record sample ${Math.min(r.current_sample, r.samples_required)}`),
-          h("div", { class: "row small muted" }, "Shortcut:", h("span", { class: "kbd" }, "R")),
+            : `Record sample ${Math.min(r.current_sample, r.samples_required)}`,
+          r.awaiting_record && c.live ? kbdHint("R") : null),
+          h("p", { class: "hint-line" }, icon("info"), h("span", null,
+            h("span", { class: "kbd" }, "R"), " or ", h("span", { class: "kbd" }, "Space"), " records, ",
+            h("span", { class: "kbd" }, "Esc"), " cancels, ", h("span", { class: "kbd" }, "?"), " shows all shortcuts.")),
           events.length ? h("div", { class: "event-log", "aria-live": "polite" }, events) : null));
     };
 
@@ -222,7 +245,8 @@ export default {
           h("div", { class: "row", }, h("span", { class: "result-burst danger" }, icon("x"))),
           h("h2", null, r.status === "cancelled" ? "Registration cancelled" : "Registration not saved"),
           h("p", { class: "muted" }, r.message || ""),
-          h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", onclick: cancel }, "Start over")));
+          h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", "aria-keyshortcuts": "N",
+            onclick: cancel }, "Start over", kbdHint("N"))));
       }
       const s = r.summary, t = s.thresholds;
       const faceText = { enrolled: "Enrolled", kept: "Kept the existing face", skipped: "Skipped (gesture only)" }[s.face];
@@ -241,8 +265,10 @@ export default {
               s.uniqueness_ratio === null ? "—" : `${fmtNum(s.uniqueness_ratio, 2)}× ${s.unique ? "✓" : "(low)"}`),
             h("dt", null, "Pose method"), h("dd", null, poseLabel(s.pose_method))),
           h("div", { class: "row" },
-            h("a", { class: "btn primary", href: `#/signin?user=${encodeURIComponent(s.username)}` }, icon("signin"), "Sign in now"),
-            h("button", { class: "btn ghost", type: "button", onclick: cancel }, "Register another"))),
+            h("a", { class: "btn primary", href: `#/signin?user=${encodeURIComponent(s.username)}`, "aria-keyshortcuts": "S" },
+              icon("signin"), "Sign in now", kbdHint("S")),
+            h("button", { class: "btn ghost", type: "button", "aria-keyshortcuts": "N", onclick: cancel },
+              "Register another", kbdHint("N")))),
         h("div", { class: "card stack" },
           h("h2", null, "Calibrated limits"),
           h("p", { class: "small muted" }, "Shown once, to the person who just enrolled. Sign-in screens never show them in protected mode."),
@@ -272,7 +298,8 @@ export default {
       else content = gestureStep(r);
       fill(root, 
         h("div", { class: "row between" }, stepper(step),
-          r.status === "active" ? h("button", { class: "btn sm ghost", type: "button", onclick: cancel }, icon("x"), "Cancel") : null),
+          r.status === "active" ? h("button", { class: "btn sm ghost", type: "button", "aria-keyshortcuts": "Escape",
+            onclick: cancel }, icon("x"), "Cancel", kbdHint("Esc")) : null),
         h("div", { class: "row small muted" }, icon("register"),
           h("span", null, "Registering ", h("strong", null, r.username), r.replacing ? " (replacing the existing profile)" : "")),
         content);
@@ -291,7 +318,7 @@ export default {
     if (current) render(current); else showAccount();
 
     return async () => {
-      document.removeEventListener("keydown", onKey);
+      releaseKeys();
       if (unsub) unsub();
       if (releasePoll) releasePoll();
       dropCam();

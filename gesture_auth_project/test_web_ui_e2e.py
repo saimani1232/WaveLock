@@ -139,7 +139,12 @@ def run(debug):
         wait_text(d, "Capture face")
         check_preview(d, f"{tag}/register-face")
         shot(d, f"{tag}_03_register_face")
-        click(d, d.find_element(By.XPATH, "//button[contains(., 'Capture face')]"))
+        if debug:
+            click(d, d.find_element(By.XPATH, "//button[contains(., 'Capture face')]"))
+        else:                                                           # C = capture face
+            WebDriverWait(d, 20).until(EC.element_to_be_clickable(
+                (By.XPATH, "//button[contains(., 'Capture face') and not(@disabled)]")))
+            d.find_element(By.TAG_NAME, "body").send_keys("c")
         wait_text(d, "Sample 1 of 5", 30)
         pool = iter(tw.genuine_set(count=12, seed=100))
         for n in range(1, 30):
@@ -207,6 +212,24 @@ def run(debug):
         if not debug and "attempts left" not in body:
             problems.append("[normal] attempts-left message missing")
         shot(d, f"{tag}_11_signin_denied")
+
+        # ---------------- keyboard shortcuts after a denial: ?, Esc, T, R
+        body_el = d.find_element(By.TAG_NAME, "body")
+        body_el.send_keys("?")
+        wait_text(d, "Keyboard shortcuts", 10)
+        listed = d.find_element(By.CSS_SELECTOR, ".modal").text
+        if "Try again" not in listed or "Switch user" not in listed:
+            problems.append(f"[{tag}] shortcut list incomplete: {listed!r}")
+        shot(d, f"{tag}_11b_shortcuts")
+        d.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        WebDriverWait(d, 10).until(lambda drv: not drv.find_elements(By.CSS_SELECTOR, ".modal-backdrop"))
+        d.find_element(By.TAG_NAME, "body").send_keys("t")              # T = try again
+        wait_text(d, "Start recording", 20)
+        app.tracker.play(WRONG_ORDER)
+        WebDriverWait(d, 20).until(EC.element_to_be_clickable(
+            (By.XPATH, "//button[contains(., 'Start recording') and not(@disabled)]")))
+        d.find_element(By.TAG_NAME, "body").send_keys("r")              # R = record
+        wait_text(d, "Access denied", 40)
         if debug:
             d.execute_script("window.scrollTo(0, document.body.scrollHeight)")
             shot(d, f"{tag}_12_signin_denied_details")

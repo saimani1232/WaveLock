@@ -1,7 +1,7 @@
 import { api } from "../api.js";
 import { CameraPanel } from "../camera.js";
 import { handMark } from "../brand.js";
-import { h, icon, clear, toast, initials, notice, fmtSeconds, fmtNum, fill, add } from "../ui.js";
+import { h, icon, clear, toast, initials, notice, fmtSeconds, fmtNum, fill, add, useShortcuts, kbdHint } from "../ui.js";
 
 const STAGES = [
   { key: "face", label: "Face anchor", icon: "face" },
@@ -99,12 +99,24 @@ export default {
     let cam = null, unsub = null, releasePoll = null, lastKey = "", session = null, busy = false;
     let seenOnServer = false;   // ignore polls that started before this session existed
     let lockTotal = 0;          // longest remaining lock seen, for the countdown ring
-    const onKey = (e) => {
-      if (!session || session.phase !== "ready") return;
-      if (e.target.closest && e.target.closest("input, textarea, select, button")) return;
-      if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); record(); }
+    // Keyboard shortcuts that apply in the current state (see useShortcuts).
+    const shortcuts = () => {
+      const s = session;
+      if (!s) return [];
+      const list = [];
+      if (s.phase === "ready" && !(s.locked_for > 0) && cam && cam.live) {
+        list.push({ keys: ["r", "space"], label: "Start recording", run: record });
+      }
+      if (s.phase === "result" && s.result) {
+        list.push({ keys: ["t"], label: s.result.granted ? "Sign in again" : "Try again", run: tryAgain });
+        list.push({ keys: ["d"], label: "Done (back to the dashboard)", run: () => endSession(true) });
+      }
+      if (s.phase === "ready" || s.phase === "result") {
+        list.push({ keys: ["u"], label: "Switch user", run: () => endSession(false) });
+      }
+      return list;
     };
-    document.addEventListener("keydown", onKey);
+    const releaseKeys = useShortcuts(shortcuts);
 
     // ------------------------------------------------------------ landing
     const showLanding = (prefill = "", error = "") => {
@@ -170,6 +182,13 @@ export default {
       }
     };
 
+    const tryAgain = async () => {
+      if (busy) return;
+      busy = true;
+      try { await api.authReset(); app.poll(); } catch (e) { toast(e.message, "danger"); }
+      finally { busy = false; }
+    };
+
     const endSession = async (goHome) => {
       try { await api.authEnd(); } catch (e) { /* already ended */ }
       if (goHome) app.go("dashboard"); else showLanding();
@@ -183,7 +202,8 @@ export default {
         h("div", { class: "stack" }, cam.el,
           h("p", { class: "hint-line" }, icon("info"),
             h("span", null, "Press ", h("span", { class: "kbd" }, "R"), " or ", h("span", { class: "kbd" }, "Space"),
-              " to record. Keep your hand and face in the frame for the whole recording."))),
+              " to record, ", h("span", { class: "kbd" }, "T"), " to try again. Keep your hand and face in the frame. ",
+              h("span", { class: "kbd" }, "?"), " shows all shortcuts."))),
         h("div", { class: "stack" },
           h("div", { class: "card" },
             h("div", { class: "user-head" },
@@ -192,8 +212,8 @@ export default {
                 h("div", { class: "name" }, state.username),
                 h("div", { class: "small muted" }, `${state.templates} gesture templates · ` +
                   (state.face_enrolled ? "face anchor on" : "no face anchor (legacy profile)"))),
-              h("button", { class: "btn sm ghost", type: "button", onclick: () => endSession(false) },
-                icon("logout"), "Switch user"))),
+              h("button", { class: "btn sm ghost", type: "button", "aria-keyshortcuts": "U",
+                onclick: () => endSession(false) }, icon("logout"), "Switch user", kbdHint("U")))),
           h("div", { class: "card stack" }, action,
             h("div", { class: "section-label" }, "Verification pipeline"), pipeline),
           details)));
@@ -256,9 +276,10 @@ export default {
             h("li", null, "Start recording and perform your gesture at your normal speed.")));
         }
         add(action, h("button", {
-          class: "btn primary lg block", type: "button",
+          class: "btn primary lg block", type: "button", "aria-keyshortcuts": "R Space",
           disabled: s.locked_for > 0 || !(cam && cam.live), onclick: record,
-        }, icon("record"), cam && cam.live ? "Start recording" : "Waiting for the camera…"));
+        }, icon("record"), cam && cam.live ? "Start recording" : "Waiting for the camera…",
+          cam && cam.live && !(s.locked_for > 0) ? kbdHint("R") : null));
         cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked: wait for the timer" : "Ready: press R to record" });
       } else if (s.phase === "recording") {
         add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("wave")),
@@ -292,10 +313,10 @@ export default {
         else cam && cam.setMode("denied", { title: "Access denied",
           sub: r.locked_for > 0 ? "Temporarily locked" : `${r.attempts_left} attempt${r.attempts_left === 1 ? "" : "s"} left` });
         add(action, h("div", { class: "row" },
-          h("button", { class: "btn primary", type: "button", onclick: async () => {
-            try { await api.authReset(); app.poll(); } catch (e) { toast(e.message, "danger"); }
-          } }, icon("refresh"), r.granted ? "Sign in again" : "Try again"),
-          h("button", { class: "btn ghost", type: "button", onclick: () => endSession(true) }, "Done")));
+          h("button", { class: "btn primary", type: "button", "aria-keyshortcuts": "T", onclick: tryAgain },
+            icon("refresh"), r.granted ? "Sign in again" : "Try again", kbdHint("T")),
+          h("button", { class: "btn ghost", type: "button", "aria-keyshortcuts": "D", onclick: () => endSession(true) },
+            "Done", kbdHint("D"))));
         if (app.debug && r.details) add(details, detailsCard(r.details, r));
       }
     };
@@ -326,7 +347,7 @@ export default {
     else showLanding(params.get("user") || "");
 
     return async () => {
-      document.removeEventListener("keydown", onKey);
+      releaseKeys();
       if (unsub) unsub();
       if (releasePoll) releasePoll();
       if (cam) cam.stop();

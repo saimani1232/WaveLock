@@ -91,3 +91,20 @@ Fixed 2026-10-14: with a real webcam the preview stayed black although the chips
 - Camera panel (`js/camera.js`): picture hidden until a real frame; scan ring (SVG rect, `pathLength=100`) fills during recording and turns green / red; coaching hints from `hand_visible`, `face_in_view` and `brightness` (below 40 = low light); status chips under the picture; result banner inside it.
 - Protected mode never shows per-stage verdicts: stages read "Checked", only the decision is coloured.
 - Colour tokens meet WCAG AA (4.5:1) for text in both themes; all motion stops under `prefers-reduced-motion`.
+
+## 9. Keyboard shortcuts
+
+Single keys, shown as small badges on their buttons; **?** lists the ones available on the current screen.
+
+| Screen | Keys |
+|---|---|
+| Sign in, ready | **R** or **Space** record |
+| Sign in, after a result | **T** try again / sign in again, **D** done |
+| Sign in, ready or after a result | **U** switch user |
+| Register, face step | **C** capture face, **S** skip |
+| Register, gesture step | **R** or **Space** record the next sample |
+| Register, in progress | **Esc** cancel (asks first) |
+| Register, finished | **S** sign in now, **N** register another |
+| Anywhere | **?** shortcut list, **Esc** close a dialog |
+
+Rules (`useShortcuts` in `js/ui.js`): a key only works when its button is usable; nothing fires while typing in a text box, with Ctrl / Alt / Cmd held, while a dialog is open, or on key repeat; Space on a focused button is left to the browser.

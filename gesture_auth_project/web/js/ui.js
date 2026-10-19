@@ -189,3 +189,56 @@ export function pill(text, kind = "", iconName = null, dot = false) {
   return h("span", { class: `pill sm ${kind}` }, dot ? h("span", { class: "dot" }) : null,
     iconName ? icon(iconName) : null, text);
 }
+
+// ------------------------------------------------------------------ keyboard shortcuts
+// One page at a time registers a provider that returns the shortcuts that
+// apply *right now* (e.g. T only after a result). Every page follows the same
+// safety rules, so a key never fires by accident:
+//   - not while typing in a text box, list or editable element,
+//   - not with Ctrl / Alt / Cmd held (browser shortcuts keep working),
+//   - not while a dialog is open (Esc belongs to the dialog),
+//   - not on key repeat (holding R records once),
+//   - Space is left to a focused button, which presses it natively.
+// Bindings: [{ keys: ["t"], label: "Try again", run: () => ... }]
+let activeProvider = null;
+
+function typingTarget(el) {
+  return !!(el && el.closest && el.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
+}
+
+function keyName(e) {
+  if (e.key === " " || e.key === "Spacebar") return "space";
+  if (e.key === "Escape" || e.key === "Esc") return "escape";
+  return e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+}
+
+export function useShortcuts(provider) {
+  activeProvider = provider;
+  const onKey = (e) => {
+    if (e.defaultPrevented || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (typingTarget(e.target) || document.querySelector(".modal-backdrop")) return;
+    const name = keyName(e);
+    if (name === "space" && e.target.closest && e.target.closest("button, a")) return;
+    const binding = (provider() || []).find((b) => b.keys.includes(name));
+    if (!binding) return;
+    e.preventDefault();
+    binding.run();
+  };
+  document.addEventListener("keydown", onKey);
+  return () => {
+    document.removeEventListener("keydown", onKey);
+    if (activeProvider === provider) activeProvider = null;
+  };
+}
+
+export function activeShortcuts() {
+  try { return activeProvider ? activeProvider() || [] : []; } catch (e) { return []; }
+}
+
+// Small key badge shown inside a button; the button also announces the key.
+export function kbdHint(key) {
+  return h("span", { class: "kbd-hint", "aria-hidden": "true" }, key);
+}
+
+const KEY_LABEL = { space: "Space", escape: "Esc" };
+export function keyLabel(k) { return KEY_LABEL[k] || k.toUpperCase(); }

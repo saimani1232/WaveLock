@@ -1,7 +1,7 @@
 // WaveLock Console — shell: router, theme, status polling, camera lifecycle.
 
 import { api } from "./api.js";
-import { h, icon, clear, toast, fill, add } from "./ui.js";
+import { h, icon, clear, toast, fill, add, modal, activeShortcuts, keyLabel } from "./ui.js";
 import dashboard from "./views/dashboard.js";
 import signin from "./views/signin.js";
 import register from "./views/register.js";
@@ -30,6 +30,7 @@ class App {
   async init() {
     this.buildNav();
     this.initTheme();
+    this.initShortcutHelp();
     try {
       this.system = await api.system();
     } catch (e) {
@@ -39,6 +40,38 @@ class App {
     window.addEventListener("hashchange", () => this.route());
     await this.route();
     this.poll();
+  }
+
+  // ---------------------------------------------------------------- shortcut help
+  // "?" lists the shortcuts of the current page (from its useShortcuts provider).
+  initShortcutHelp() {
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "?" || e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
+      const t = e.target;
+      if (t && t.closest && t.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (document.querySelector(".modal-backdrop")) return;
+      e.preventDefault();
+      this.showShortcuts();
+    });
+  }
+
+  showShortcuts() {
+    const now = activeShortcuts();
+    const row = (keys, label) => h("div", { class: "sc-row" },
+      h("span", { class: "sc-keys" }, keys.map((k, i) => [i ? h("span", { class: "sc-or" }, "or") : null,
+        h("span", { class: "kbd" }, keyLabel(k))])),
+      h("span", null, label));
+    modal({
+      title: "Keyboard shortcuts",
+      body: h("div", { class: "stack" },
+        h("p", { class: "small muted" }, "Single keys, no Ctrl needed. They do nothing while you are typing in a box."),
+        h("div", { class: "section-label" }, "Available right now"),
+        now.length ? h("div", { class: "sc-list" }, now.map((b) => row(b.keys, b.label)))
+          : h("p", { class: "small muted" }, "None on this screen."),
+        h("div", { class: "section-label" }, "Everywhere"),
+        h("div", { class: "sc-list" }, row(["?"], "Show this list"), row(["escape"], "Close a dialog"))),
+      actions: [{ label: "Close", kind: "primary", value: null }],
+    });
   }
 
   // ---------------------------------------------------------------- theme
