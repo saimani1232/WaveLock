@@ -15,6 +15,15 @@ Key Kinematic Features:
 1. Fingertip Velocity Profile: Frame-to-frame velocity envelope across active fingertips (8, 12, 16, 20).
 2. Kinematic Jerk Metric: Mean squared jerk measuring movement smoothness vs hesitation.
 3. Velocity Energy Distribution: Kinetic energy distribution across the temporal phases of the gesture.
+
+Coordinate frame (reviewed in semester 2): the features are computed on
+wrist-centred frames scaled per frame by the largest wrist distance
+(utils.normalize.normalize_spatial), so they describe finger articulation
+relative to the wrist; travel of the whole hand is checked by the separate
+wrist-path gate. Scaling by the palm length instead (which, unlike the
+largest wrist distance, does not shrink when the fingers curl) changed the
+kinematic confidences but no decision on the real enrolment recordings
+(notes/results/semester2, variant "kinpalm"), so the frame was kept.
 """
 
 import numpy as np

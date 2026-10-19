@@ -344,6 +344,78 @@ def test_template_aging_keeps_everything_aligned():
             templates_dir=tmp, live_raw=live_raw, anthropometric_confidence=0.5) is None
 
 
+def test_template_aging_anchor_and_log():
+    from utils.secure_store import load_array
+    with TempDir() as tmp:
+        profile = register(tmp)
+        user_dir = os.path.join(tmp, "alice")
+        enrolled = [t.copy() for t in profile["templates"]]
+
+        def age(seed):
+            raw = genuine_set(count=1, seed=seed, noise=0.0005)[0]
+            prof = gc.load_user_profile("alice", templates_dir=tmp)
+            return gc.update_templates_if_high_confidence(
+                "alice", normalize_gesture(raw), 0.0, prof["threshold"], prof["templates"],
+                templates_dir=tmp, live_raw=raw)
+
+        # first update: the set as it was becomes the anchor, and it is logged
+        first = age(4242)
+        assert first is not None and "anchor_distance" in first
+        cfg = gc._read_config("alice", tmp)
+        assert cfg["aging_anchor"]["count"] == 5
+        assert cfg["aging_anchor"]["threshold"] == round(profile["threshold"], 4)
+        for i, t in enumerate(enrolled, start=1):
+            assert np.allclose(load_array(os.path.join(user_dir, f"anchor_{i}.npy")), t)
+        assert [e["event"] for e in cfg["aging_log"]] == ["replaced"]
+        assert cfg["aging_log"][0]["template"] == first["replaced_template"]
+        assert gc.list_registered_users(tmp) == ["alice"]          # anchor files are not users
+        assert len(gc.load_all_user_templates("alice", tmp)) == 5  # nor templates
+
+        # a later update is checked against the anchor, not the aged set
+        cfg["aging_anchor"]["threshold"] = 1e-6
+        gc._atomic_write_json(os.path.join(user_dir, "config.json"), cfg)
+        before = [load_array(os.path.join(user_dir, f"gesture_{i}.npy")) for i in range(1, 6)]
+        assert age(5151) is None, "drift beyond the anchor must not age"
+        after = [load_array(os.path.join(user_dir, f"gesture_{i}.npy")) for i in range(1, 6)]
+        assert all(np.array_equal(a, b) for a, b in zip(before, after))
+        log = gc._read_config("alice", tmp)["aging_log"]
+        assert [e["event"] for e in log] == ["replaced", "refused_anchor"]
+
+        # a damaged anchor fails closed (no aging)
+        cfg = gc._read_config("alice", tmp)
+        cfg["aging_anchor"]["threshold"] = 1e6
+        gc._atomic_write_json(os.path.join(user_dir, "config.json"), cfg)
+        os.remove(os.path.join(user_dir, "anchor_3.npy"))
+        assert age(6161) is None
+
+        # the log is bounded
+        cfg = gc._read_config("alice", tmp)
+        for k in range(gc.AGING_LOG_MAX + 5):
+            gc._append_aging_log(cfg, {"event": "replaced", "template": k})
+        assert len(cfg["aging_log"]) == gc.AGING_LOG_MAX
+        assert cfg["aging_log"][-1]["template"] == gc.AGING_LOG_MAX + 4
+
+        # re-registration starts a fresh anchor
+        register(tmp)
+        assert "aging_anchor" not in gc._read_config("alice", tmp)
+        assert not any(f.startswith("anchor_") for f in os.listdir(user_dir))
+
+
+def test_signin_never_writes_config():
+    with TempDir() as tmp:
+        register(tmp)
+        path = os.path.join(tmp, "alice", "config.json")
+        cfg = gc._read_config("alice", tmp)
+        cfg["anthropometric_profile"]["method"] = "old_method_v1"   # forces recalibration
+        gc._atomic_write_json(path, cfg)
+        with open(path, "rb") as f:
+            before = f.read()
+        prof = gc.load_user_profile("alice", templates_dir=tmp)
+        assert prof["anthropometric_profile"]["method"] == "metacarpal_invariant_v2"
+        with open(path, "rb") as f:
+            assert f.read() == before, "loading a profile rewrote config.json"
+
+
 def test_evaluation_scripts_run():
     with TempDir() as tmp:
         register(tmp, username="evaluser")
@@ -781,7 +853,9 @@ def run_desktop_signin(tmp, gesture_raw, answer_challenge=True, timeout=None):
         ch = holder["ch"]
         if ch is not None and ch.state == "running":
             return finger_pose(ch.step["count"]) if answer_challenge else finger_pose(0)
-        if ch is not None and ch.state == "passed":
+        if ch is not None and ch.state == "passed" and "[REC]" in out.getvalue():
+            # replay the gesture from the recording start (after the get-ready
+            # lead-in, during which the hand waits in the starting posture)
             if holder["passed_at"] is None:
                 holder["passed_at"] = time.time()
             k = (time.time() - holder["passed_at"]) / ga.RECORDING_DURATION_SEC
@@ -871,7 +945,7 @@ def test_desktop_signin_with_liveness():
         register(tmp)
         entry, text = run_desktop_signin(tmp, genuine_set(1, seed=31)[0])
         assert entry["granted"] is True, (entry, text[-800:])
-        assert "[LIVE] Passed" in text
+        assert "[LIVE] Passed. Get ready" in text and "[REC] Perform your gesture" in text
         entry, text = run_desktop_signin(tmp, genuine_set(1, seed=31)[0],
                                          answer_challenge=False, timeout=1.5)
         assert entry["granted"] is False and entry["reason"] == "liveness_timeout_fingers", entry

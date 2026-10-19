@@ -305,6 +305,11 @@ def test_security_guards():
             assert app.request("GET", "/api/stream", headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
             assert app.request("POST", "/api/camera/stop", headers={"X-WaveLock-Client": ""})[0] == 403
             assert app.request("POST", "/api/camera/stop", headers={"Content-Type": "text/plain"})[0] == 415
+            # refused POSTs with a body still get their response (the body is read first)
+            for i in range(30):
+                hdr = [{"X-WaveLock-Client": ""}, {"Content-Type": "text/plain"}][i % 2]
+                st = app.request("POST", "/api/camera/stop", {"pad": "x" * 60000}, headers=hdr)[0]
+                assert st == (403, 415)[i % 2], st
             for path in ("/../gesture_compare.py", "/%2e%2e/gesture_compare.py",
                          "/..%5cgesture_compare.py", "/js/../../web_app.py"):
                 assert app.request("GET", path, raw=True)[0] == 404, path
@@ -401,7 +406,6 @@ def test_existing_user_needs_confirmation_and_cancel_keeps_profile():
         app = make_app(tmp)
         try:
             register_via_api(app)
-            before = sorted(os.listdir(os.path.join(tmp, "alice")))
             status, payload, _ = app.request("POST", "/api/register/begin", {"username": "Alice"})
             assert status == 409 and payload["code"] == "exists"
             # only the owner may replace a profile: refused until alice signs in
@@ -411,13 +415,17 @@ def test_existing_user_needs_confirmation_and_cancel_keeps_profile():
             status, res = sign_in(app, "alice", tw.genuine_set(1, seed=31)[0])
             assert res["granted"], res
             app.ok("POST", "/api/auth/end")
+            # snapshot after the sign-in (a grant may age a template and write its anchor)
+            before = {f: os.path.getmtime(os.path.join(tmp, "alice", f))
+                      for f in os.listdir(os.path.join(tmp, "alice"))}
             st = app.ok("POST", "/api/register/begin", {"username": "alice", "overwrite": True})
             assert st["replacing"] is True
             app.ok("POST", "/api/register/face/skip")
             app.wait(lambda s: s["register"]["awaiting_record"], what="awaiting")
             app.ok("POST", "/api/register/cancel")
             app.ok("POST", "/api/register/close")
-            assert sorted(os.listdir(os.path.join(tmp, "alice"))) == before
+            assert {f: os.path.getmtime(os.path.join(tmp, "alice", f))
+                    for f in os.listdir(os.path.join(tmp, "alice"))} == before
             # a second tab must not replace a running registration
             app.ok("POST", "/api/register/begin", {"username": "carol"})
             status, payload, _ = app.request("POST", "/api/register/begin", {"username": "dave"})
@@ -606,6 +614,15 @@ def test_liveness_challenge_flow():
                 try:
                     status, res = sign_in(app, "alice", genuine)
                     assert status == 200 and res["granted"], res
+                    # after the challenge, the get-ready lead-in is reported, then recording
+                    app.ok("POST", "/api/auth/reset")
+                    app.tracker.play(genuine)
+                    app.ok("POST", "/api/auth/record")
+                    st = app.wait(lambda s: s["auth"]["get_ready"] is not None, what="get-ready")
+                    assert st["auth"]["phase"] == "challenge", st["auth"]
+                    assert 0 <= st["auth"]["get_ready"] <= lv.GESTURE_LEAD_IN_SEC, st["auth"]
+                    st = app.wait(lambda s: s["auth"]["phase"] in ("result", "ready"), what="decision")
+                    assert st["auth"]["result"]["granted"], st["auth"]["result"]
                 finally:
                     gesture_auth.verify_face_over_frames = real
 
