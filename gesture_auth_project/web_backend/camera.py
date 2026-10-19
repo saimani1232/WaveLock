@@ -16,6 +16,7 @@ import numpy as np
 
 from utils.landmarks import extract_landmarks
 from utils.liveness import count_extended_fingers, yaw_proxy
+from utils.face_auth import FACE_SAMPLE_GAP_SEC
 
 FACE_DETECT_INTERVAL_SEC = 0.25      # same throttle as gesture_auth.py's preview
 IDENTITY_INTERVAL_SEC = 0.5          # developer identity preview (detect + SFace)
@@ -144,6 +145,7 @@ class FaceCapture:
     def __init__(self, required):
         self.required = required
         self.embeddings = []
+        self.last_sample = 0.0
         self.started = time.time()
         self.error = None
         self.done = threading.Event()
@@ -501,7 +503,9 @@ class CameraService:
             rec.done.set()
 
     def _feed_face_capture(self, fcap, clean, face_row, now):
-        if face_row is not None:
+        # frames at least FACE_SAMPLE_GAP_SEC apart: small head movements are covered
+        if face_row is not None and now - fcap.last_sample >= FACE_SAMPLE_GAP_SEC:
+            fcap.last_sample = now
             fcap.embeddings.append(np.asarray(self.face_ops.embed(clean, face_row)).flatten())
         if len(fcap.embeddings) >= fcap.required:
             self._finish_face_capture(fcap)

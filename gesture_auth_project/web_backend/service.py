@@ -62,6 +62,7 @@ from utils.normalize import (
     POSE_METHOD_ASPECT,
 )
 from utils.face_auth import (
+    combine_face_embeddings,
     save_face_embedding,
     SFACE_COSINE_THRESHOLD,
     SFACE_LOOKALIKE_FLOOR,
@@ -109,12 +110,10 @@ def jsonable(value):
 
 
 def _mean_face_embedding(embeddings):
-    """Mean of the captured embeddings, L2-normalised (as in the CLI)."""
-    master = np.mean(np.asarray(embeddings, dtype=np.float64), axis=0)
-    norm = np.linalg.norm(master)
-    if norm < 1e-8:
-        return None
-    return (master / norm).astype(np.float32)
+    """Enrolled embedding from the captured frames (utils.face_auth.combine_face_embeddings):
+    None when the frames are invalid or do not all show the same person."""
+    master, _ = combine_face_embeddings(embeddings)
+    return master
 
 
 def _console_never_fails():
@@ -658,7 +657,7 @@ class WaveLockService:
             master = _mean_face_embedding(fcap.embeddings)
             if master is None:
                 r["face_status"] = "failed"
-                r["message"] = "Face capture produced an invalid embedding. Try again."
+                r["message"] = "The face frames were invalid or did not all show the same person. Keep only your face in view and try again."
                 return
             r["face_embedding"] = master
             r["face_status"] = "captured"
@@ -912,7 +911,7 @@ class WaveLockService:
             else:
                 master = _mean_face_embedding(fcap.embeddings)
                 if master is None:
-                    status, message = "failed", "Invalid face embedding. Try again."
+                    status, message = "failed", "The face frames were invalid or did not all show the same person. Keep only your face in view and try again."
                 else:
                     save_face_embedding(f["username"], master, self.templates_dir)
                     set_face_enrolled_flag(f["username"], self.templates_dir)

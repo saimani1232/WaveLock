@@ -63,6 +63,8 @@ from cohort_library import (
 from utils.face_auth import (
     detect_primary_face,
     extract_face_embedding,
+    combine_face_embeddings,
+    FACE_SAMPLE_GAP_SEC,
 )
 from utils.attempt_limit import verified_recently, consume_verification, OWNER_REQUIRED_MESSAGE
 from utils.camera_utils import (
@@ -529,6 +531,7 @@ def capture_face_enrollment_phase(cap, username):
 
     captured_embs = []
     REQUIRED_FRAMES = 5
+    last_capture = 0.0                       # frames are spaced FACE_SAMPLE_GAP_SEC apart
     enrolling = False
 
     while True:
@@ -569,7 +572,8 @@ def capture_face_enrollment_phase(cap, username):
             )
 
         if enrolling:
-            if face_detected:
+            if face_detected and time.time() - last_capture >= FACE_SAMPLE_GAP_SEC:
+                last_capture = time.time()
                 emb = extract_face_embedding(frame, face_row)
                 captured_embs.append(emb)
                 cv2.putText(
@@ -578,14 +582,13 @@ def capture_face_enrollment_phase(cap, username):
                 )
 
             if len(captured_embs) >= REQUIRED_FRAMES:
-                master = np.mean(captured_embs, axis=0)
-                norm = np.linalg.norm(master)
-                if norm < 1e-8:
-                    print("  [FAIL] Face capture produced an invalid embedding. Try again.")
+                master, why = combine_face_embeddings(captured_embs)
+                if master is None:
+                    print(f"  [FAIL] Face capture refused ({why}): keep only your own face in view "
+                          f"and try again.")
                     captured_embs = []
                     enrolling = False
                     continue
-                master = master / norm
                 print("    ✓ Face captured. It will be saved when registration completes.")
 
                 cv2.rectangle(display, (0, h // 2 - 35), (w, h // 2 + 35), (0, 180, 0), -1)

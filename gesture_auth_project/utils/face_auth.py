@@ -244,6 +244,40 @@ def verify_face_over_frames(frames, enrolled_embedding, max_samples=6):
             "faces_detected": len(detected)}
 
 
+# Face enrolment: frames are taken at least FACE_SAMPLE_GAP_SEC apart so small
+# natural head movements are covered (not 5 near-identical consecutive
+# frames), and all frames must show the same person before they are averaged.
+FACE_SAMPLE_GAP_SEC = 0.35
+FACE_CONSISTENCY_MIN_COSINE = 0.50   # same-person frames score far higher; strangers ~0
+
+
+def combine_face_embeddings(embeddings, min_cosine=FACE_CONSISTENCY_MIN_COSINE):
+    """
+    Average several face embeddings into one enrolled embedding.
+
+    Each embedding is L2-normalised first (SFace compares by cosine). If any
+    two frames disagree (cosine < min_cosine) the capture is refused, so a
+    face swap during enrolment cannot be averaged in.
+
+    Returns:
+        (embedding (128,) float32, None) or (None, reason).
+    """
+    if embeddings is None or len(embeddings) == 0:
+        return None, "no_face_frames"
+    embs = np.asarray(embeddings, dtype=np.float64).reshape(len(embeddings), -1)
+    norms = np.linalg.norm(embs, axis=1, keepdims=True)
+    if np.any(norms < 1e-8):
+        return None, "invalid_face_embedding"
+    unit = embs / norms
+    if unit.shape[0] > 1:
+        cos = unit @ unit.T
+        if float(cos[np.triu_indices(unit.shape[0], 1)].min()) < min_cosine:
+            return None, "inconsistent_face_frames"
+    master = unit.mean(axis=0)
+    master /= np.linalg.norm(master)
+    return master.astype(np.float32), None
+
+
 def save_face_embedding(username, embedding, templates_dir):
     """Atomically save the 128-D face embedding to templates/<username>/face_embedding.npy."""
     user_dir = os.path.join(templates_dir, username)

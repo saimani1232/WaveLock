@@ -6,6 +6,7 @@ and saves the master face profile to templates/<username>/face_embedding.npy.
 """
 
 import sys
+import time
 import argparse
 import cv2
 import numpy as np
@@ -14,6 +15,8 @@ from utils.face_auth import (
     detect_primary_face,
     extract_face_embedding,
     save_face_embedding,
+    combine_face_embeddings,
+    FACE_SAMPLE_GAP_SEC,
 )
 from utils.camera_utils import open_camera, print_camera_diagnostics
 from utils.attempt_limit import verified_recently, consume_verification, OWNER_REQUIRED_MESSAGE
@@ -42,6 +45,7 @@ def enroll_face_interactive(username, camera_index=None):
     cap = open_camera(camera_index=camera_index, width=640, height=480)
 
     embeddings = []
+    last_capture = 0.0                       # frames are spaced FACE_SAMPLE_GAP_SEC apart
     REQUIRED_FRAMES = 5
     enrolling = False
     enrolled_count = 0
@@ -87,7 +91,8 @@ def enroll_face_interactive(username, camera_index=None):
 
             # Capture burst
             if enrolling:
-                if face_detected:
+                if face_detected and time.time() - last_capture >= FACE_SAMPLE_GAP_SEC:
+                    last_capture = time.time()
                     emb = extract_face_embedding(frame, face_row)
                     embeddings.append(emb)
                     enrolled_count += 1
@@ -99,13 +104,12 @@ def enroll_face_interactive(username, camera_index=None):
 
                 if enrolled_count >= REQUIRED_FRAMES:
                     # Average and normalize master embedding
-                    master_emb = np.mean(embeddings, axis=0)
-                    norm = np.linalg.norm(master_emb)
-                    if norm < 1e-8:
-                        print("  [FAIL] Invalid face embedding captured. Try again.")
+                    master_emb, why = combine_face_embeddings(embeddings)
+                    if master_emb is None:
+                        print(f"  [FAIL] Face capture refused ({why}): keep only your own face in "
+                              f"view and try again.")
                         embeddings, enrolled_count, enrolling = [], 0, False
                         continue
-                    master_emb = master_emb / norm
                     save_path = save_face_embedding(username, master_emb, TEMPLATES_DIR)
                     set_face_enrolled_flag(username)
 
