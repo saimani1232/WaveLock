@@ -879,6 +879,70 @@ def compute_threshold_from_samples(samples):
 
 
 # ============================================================================
+# TEMPORAL TRIM (semester 2)
+# ============================================================================
+# The gesture may start earlier or later inside the fixed recording window
+# (at sign-in the recording starts after the liveness check; at registration
+# when the user presses R). The finger-state, segment and rhythm checks compare
+# frame by frame, so a shift of about 0.5 s rejected every leave-one-out
+# attempt (notes/results/semester2/timing_shift.json). Profiles tagged with
+# config["temporal_trim"] = TEMPORAL_TRIM_METHOD drop the still frames at the
+# start and end of every recording (enrolment and sign-in) before matching.
+# Stored gesture_N_raw.npy files stay untrimmed; profiles without the tag are
+# matched exactly as before.
+TEMPORAL_TRIM_METHOD = "motion_span_v1"
+NEW_PROFILE_TEMPORAL_TRIM = TEMPORAL_TRIM_METHOD   # used by new registrations
+TRIM_KEEP_FROM = 0.03          # keep the span from 3 % ...
+TRIM_KEEP_TO = 0.97            # ... to 97 % of the cumulative landmark motion
+TRIM_MIN_FRACTION = 0.60       # but never fewer than 60 % of the frames
+
+
+def trim_still_frames(raw, keep_from=TRIM_KEEP_FROM, keep_to=TRIM_KEEP_TO,
+                      min_fraction=TRIM_MIN_FRACTION):
+    """
+    Drop the still frames at the start and end of a raw recording.
+
+    Keeps the frames between keep_from and keep_to of the cumulative x/y
+    motion of all 21 landmarks, widened symmetrically to at least
+    min_fraction of the frames. Recordings shorter than 10 frames, or
+    without motion, are returned unchanged.
+
+    Args:
+        raw: raw landmarks, shape (N, 21, 3).
+
+    Returns:
+        numpy array (M, 21, 3), M <= N.
+    """
+    raw = np.asarray(raw, dtype=np.float64)
+    n = raw.shape[0]
+    if n < 10:
+        return raw
+    step = np.linalg.norm(np.diff(raw[:, :, :2], axis=0), axis=2).sum(axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(step)])
+    if cum[-1] <= 1e-9:
+        return raw
+    cum /= cum[-1]
+    a = int(np.searchsorted(cum, keep_from))
+    b = int(np.searchsorted(cum, keep_to)) + 1
+    need = int(np.ceil(min_fraction * n))
+    if b - a < need:
+        extra = need - (b - a)
+        a = max(0, a - extra // 2)
+        b = min(n, a + need)
+        a = max(0, b - need)
+    return raw[a:b]
+
+
+def matching_recording(raw, temporal_trim=None):
+    """The part of a raw recording a profile matches on (see TEMPORAL_TRIM_METHOD)."""
+    if temporal_trim is None:
+        return np.asarray(raw, dtype=np.float64)
+    if temporal_trim == TEMPORAL_TRIM_METHOD:
+        return trim_still_frames(raw)
+    raise ValueError(f"Unknown temporal_trim method {temporal_trim!r}.")
+
+
+# ============================================================================
 # TEMPLATE LOADING FUNCTIONS
 # ============================================================================
 
@@ -1172,6 +1236,9 @@ def load_user_profile(username, templates_dir=TEMPLATES_DIR):
     raw_templates = load_user_raw_templates(username, len(templates), templates_dir)
     pose_method = config.get("pose_method", POSE_METHOD_LEGACY)
     pose_aspect = aspect_for_method(pose_method, config.get("frame_aspect"))
+    temporal_trim = config.get("temporal_trim")
+    matching_raws = (None if raw_templates is None else
+                     [matching_recording(r, temporal_trim) for r in raw_templates])
 
     # Fail closed: a user whose face was enrolled must never be silently
     # downgraded to gesture-only because the embedding file is missing or
@@ -1191,7 +1258,7 @@ def load_user_profile(username, templates_dir=TEMPLATES_DIR):
         trajectory_threshold = float(config["trajectory_threshold"])
         aspect = float(frame_aspect) if frame_aspect else 1.0
         trajectory_templates = [
-            extract_wrist_trajectory(r, aspect) for r in raw_templates
+            extract_wrist_trajectory(r, aspect) for r in matching_raws
         ]
 
     return {
@@ -1207,8 +1274,9 @@ def load_user_profile(username, templates_dir=TEMPLATES_DIR):
             username, templates, templates_dir
         ),
         "kinematic_profile": load_user_kinematic_profile(
-            username, templates, templates_dir, raw_templates, pose_aspect
+            username, templates, templates_dir, matching_raws, pose_aspect
         ),
+        "temporal_trim": temporal_trim,
         "trajectory_threshold": trajectory_threshold,
         "trajectory_templates": trajectory_templates,
         "frame_aspect": frame_aspect,
@@ -1562,7 +1630,7 @@ def list_registered_users(templates_dir=TEMPLATES_DIR):
 # ============================================================================
 
 def build_profile_config(samples, raw_samples=None, frame_aspect=None,
-                         pose_method=POSE_METHOD_LEGACY):
+                         pose_method=POSE_METHOD_LEGACY, temporal_trim=None):
     """
     Calibrate every threshold and biometric baseline from a template set.
 
@@ -1577,12 +1645,20 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None,
         frame_aspect: width / height of the camera frames used to record.
         pose_method: how `samples` were normalised (POSE_METHOD_LEGACY or
             POSE_METHOD_ASPECT); live attempts are normalised the same way.
+        temporal_trim: None or TEMPORAL_TRIM_METHOD. `samples` must already
+            come from matching_recording(raw, temporal_trim); raw_samples are
+            the untrimmed recordings and are trimmed here for the wrist path
+            and kinematics.
 
     Returns:
         dict ready to be written to config.json (face_enrolled excluded).
     """
     if raw_samples is not None and len(raw_samples) != len(samples):
         raise ValueError("raw_samples must align one-to-one with samples.")
+    if raw_samples is not None:
+        raw_samples = [matching_recording(r, temporal_trim) for r in raw_samples]
+    elif temporal_trim is not None:
+        raise ValueError("temporal_trim needs the raw recordings.")
 
     pairwise_distances = compute_pairwise_distances(samples)
     threshold_details = compute_threshold_details(pairwise_distances)
@@ -1644,6 +1720,8 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None,
         "segment_count": SEGMENT_COUNT,
         "anthropometric_profile": calibrate_anthropometric_profile(samples),
     }
+    if temporal_trim is not None:
+        config["temporal_trim"] = temporal_trim
 
     if raw_samples is not None:
         aspect = float(frame_aspect) if frame_aspect else 1.0
@@ -1674,7 +1752,7 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None,
 def save_registration(username, samples, threshold=None, pairwise_distances=None,
                       templates_dir=TEMPLATES_DIR, raw_samples=None,
                       frame_aspect=None, face_embedding=None,
-                      pose_method=POSE_METHOD_LEGACY):
+                      pose_method=POSE_METHOD_LEGACY, temporal_trim=None):
     """
     Atomically save a complete multi-sample registration to disk.
 
@@ -1697,6 +1775,7 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
         frame_aspect: camera frame width / height used during recording.
         face_embedding: optional (128,) face embedding.
         pose_method: how `samples` were normalised (see build_profile_config).
+        temporal_trim: see build_profile_config (raw_samples stay untrimmed on disk).
 
     Returns:
         str: Path to the user's template directory.
@@ -1705,7 +1784,8 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
     if not samples:
         raise ValueError("Cannot save a registration without samples.")
 
-    config = build_profile_config(samples, raw_samples, frame_aspect, pose_method)
+    config = build_profile_config(samples, raw_samples, frame_aspect, pose_method,
+                                  temporal_trim)
 
     os.makedirs(templates_dir, exist_ok=True)
     user_dir = os.path.join(templates_dir, username)
@@ -1925,6 +2005,7 @@ def update_templates_if_high_confidence(
     new_config = build_profile_config(
         updated_templates, updated_raw, old_config.get("frame_aspect"),
         old_config.get("pose_method", POSE_METHOD_LEGACY),
+        old_config.get("temporal_trim"),
     )
 
     # Merge so unrelated keys survive, then write data before config.

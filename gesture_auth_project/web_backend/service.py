@@ -29,6 +29,8 @@ import numpy as np
 from gesture_compare import (
     TEMPLATES_DIR,
     NUM_REGISTRATION_SAMPLES,
+    NEW_PROFILE_TEMPORAL_TRIM,
+    matching_recording,
     list_registered_users,
     normalize_username,
     load_user_profile,
@@ -730,7 +732,8 @@ class WaveLockService:
                     continue
                 raw = np.asarray(rec.landmarks, dtype=np.float64)
                 aspect = rec.frame_aspect or (4 / 3)
-                pose = normalize_gesture(raw, TARGET_FRAMES,
+                pose = normalize_gesture(matching_recording(raw, NEW_PROFILE_TEMPORAL_TRIM),
+                                         TARGET_FRAMES,
                                          frame_aspect=aspect_for_method(r["pose_method"], aspect))
                 with self._lock:
                     r["phase"] = "checking"
@@ -789,7 +792,8 @@ class WaveLockService:
         user_dir = save_registration(
             name, samples, threshold, pairwise, templates_dir=self.templates_dir,
             raw_samples=raw_samples, frame_aspect=frame_aspect,
-            face_embedding=r["face_embedding"], pose_method=r["pose_method"])
+            face_embedding=r["face_embedding"], pose_method=r["pose_method"],
+            temporal_trim=NEW_PROFILE_TEMPORAL_TRIM)
         if r["replacing"]:
             al.consume_verification(name, self.templates_dir)
         config = _read_config(name, self.templates_dir)

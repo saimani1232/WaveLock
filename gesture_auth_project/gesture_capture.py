@@ -55,6 +55,8 @@ from gesture_compare import (
     _read_config,
     NUM_REGISTRATION_SAMPLES,
     OUTLIER_REJECTION_FACTOR,
+    NEW_PROFILE_TEMPORAL_TRIM,
+    matching_recording,
 )
 from cohort_library import (
     generate_cohort_library,
@@ -329,7 +331,7 @@ def record_one_sample(cap, hands, mp_hands, mp_drawing, mp_drawing_styles,
                     raw = np.array(recorded_frames, dtype=np.float64)
                     h, w = frame.shape[:2]
                     normalized = normalize_gesture(
-                        raw, TARGET_FRAMES,
+                        matching_recording(raw, NEW_PROFILE_TEMPORAL_TRIM), TARGET_FRAMES,
                         frame_aspect=aspect_for_method(pose_method, w / h))
                     print(f"  [OK] Sample {sample_num}/{total_samples}: "
                           f"captured {len(recorded_frames)} frames")
@@ -786,6 +788,7 @@ def main():
             username, samples, threshold, pairwise_distances,
             raw_samples=raw_samples, frame_aspect=frame_aspect,
             face_embedding=face_embedding, pose_method=pose_method,
+            temporal_trim=NEW_PROFILE_TEMPORAL_TRIM,
         )
         if username in existing_users:
             consume_verification(username, TEMPLATES_DIR)

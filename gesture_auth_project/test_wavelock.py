@@ -401,6 +401,95 @@ def test_template_aging_anchor_and_log():
         assert not any(f.startswith("anchor_") for f in os.listdir(user_dir))
 
 
+def register_trimmed(tmp, username="alice", raws=None):
+    raws = raws if raws is not None else genuine_set()
+    poses = [normalize_gesture(gc.matching_recording(r, gc.TEMPORAL_TRIM_METHOD)) for r in raws]
+    gc.save_registration(username, poses, templates_dir=tmp, raw_samples=raws,
+                         frame_aspect=ASPECT, temporal_trim=gc.TEMPORAL_TRIM_METHOD)
+    return gc.load_user_profile(username, templates_dir=tmp)
+
+
+def in_window(raw, before, after):
+    """The gesture inside a recording window: still hand for `before` frames,
+    the gesture, then a still hand for `after` frames (real recordings have
+    such margins; a late start moves still frames from the end to the start)."""
+    raw = np.asarray(raw, float)
+    return np.concatenate([np.repeat(raw[:1], before, axis=0), raw,
+                           np.repeat(raw[-1:], after, axis=0)])
+
+
+def test_temporal_trim():
+    import gesture_auth as ga
+    from utils.secure_store import load_array
+    import migrate_profiles as mp_
+    # the helper drops still frames at both ends, never below 60 % of the frames
+    g = synth_raw(seed=3)
+    padded = np.concatenate([np.repeat(g[:1], 20, axis=0), g, np.repeat(g[-1:], 20, axis=0)])
+    t = gc.trim_still_frames(padded)
+    assert len(g) * 0.9 <= len(t) <= len(g) + 4, (len(t), len(g))
+    still = np.repeat(g[:1], 50, axis=0)
+    assert gc.trim_still_frames(still).shape == still.shape          # no motion: unchanged
+    assert gc.trim_still_frames(g[:8]).shape == (8, 21, 3)           # too short: unchanged
+    assert len(gc.trim_still_frames(g)) >= int(np.ceil(0.6 * len(g)))
+    assert np.array_equal(gc.matching_recording(padded, None), padded)
+    try:
+        gc.matching_recording(padded, "future_v9")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown temporal_trim accepted")
+
+    with TempDir() as tmp:
+        raws = [in_window(r, 30, 30) for r in genuine_set()]
+        profile = register_trimmed(tmp, raws=raws)
+        cfg = gc._read_config("alice", tmp)
+        assert cfg["temporal_trim"] == gc.TEMPORAL_TRIM_METHOD and profile["temporal_trim"] == cfg["temporal_trim"]
+        # stored raw recordings stay untrimmed
+        for i, r in enumerate(raws, start=1):
+            assert np.allclose(load_array(os.path.join(tmp, "alice", f"gesture_{i}_raw.npy")), r)
+        # a genuine attempt that starts late is still accepted
+        gesture = genuine_set(1, seed=31)[0]
+        for before, after in ((30, 30), (2, 58), (58, 2)):              # on time, early, late
+            live = in_window(gesture, before, after)
+            res = ga.evaluate_attempt(list(live), [], ASPECT, profile)
+            assert res["granted"], (before, after, res["reason"])
+            assert res["raw"].shape[0] == len(live)                  # result keeps the full recording
+        # a different gesture is still refused
+        wrong = synth_raw(order=("ring", "pinky", "index", "middle"), seed=7)
+        assert not ga.evaluate_attempt(list(wrong), [], ASPECT, profile)["granted"]
+        # aging keeps the trim
+        res = ga.evaluate_attempt(list(in_window(gesture, 30, 30)), [], ASPECT, profile)
+        gc.update_templates_if_high_confidence("alice", res["pose"], 0.0, profile["threshold"],
+                                               profile["templates"], templates_dir=tmp,
+                                               live_raw=res["raw"])
+        assert gc._read_config("alice", tmp)["temporal_trim"] == gc.TEMPORAL_TRIM_METHOD
+
+    with TempDir() as tmp:
+        # an existing (untagged) profile is matched as before
+        raws = [in_window(r, 30, 30) for r in genuine_set()]
+        profile = register(tmp, raws=raws)
+        assert profile["temporal_trim"] is None and "temporal_trim" not in gc._read_config("alice", tmp)
+        live = in_window(genuine_set(1, seed=31)[0], 30, 30)
+        res = ga.evaluate_attempt(list(live), [], ASPECT, profile)
+        assert np.allclose(res["pose"], normalize_gesture(live))
+        # ... including its sensitivity to the start time (the reason for the trim)
+        early = in_window(genuine_set(1, seed=31)[0], 2, 58)
+        res = ga.evaluate_attempt(list(early), [], ASPECT, profile)
+        assert not res["granted"] and "finger_state" in res["reason"], res["reason"]
+        # migrate_profiles --trim: dry run writes nothing, then recalibrates with a backup
+        before = sorted(os.listdir(os.path.join(tmp, "alice")))
+        assert mp_.retrim_user("alice", tmp, dry_run=True)["status"] == "would_retrim"
+        assert sorted(os.listdir(os.path.join(tmp, "alice"))) == before
+        r = mp_.retrim_user("alice", tmp)
+        assert r["status"] == "retrimmed" and os.path.isdir(r["backup"])
+        assert gc.list_registered_users(tmp) == ["alice"]          # the backup is not a user
+        reloaded = gc.load_user_profile("alice", templates_dir=tmp)
+        assert reloaded["temporal_trim"] == gc.TEMPORAL_TRIM_METHOD
+        assert all(np.allclose(a, b) for a, b in zip(reloaded["raw_templates"], raws))
+        assert mp_.retrim_user("alice", tmp)["status"] == "already_current"
+        assert ga.evaluate_attempt(list(early), [], ASPECT, reloaded)["granted"]
+
+
 def test_signin_never_writes_config():
     with TempDir() as tmp:
         register(tmp)

@@ -14,6 +14,11 @@ the legacy method until the user registers again.
 Usage:
     python migrate_profiles.py [--user NAME] [--dry-run] [--templates-dir DIR]
 
+Temporal trim (semester 2, see gesture_compare.TEMPORAL_TRIM_METHOD):
+    python migrate_profiles.py --trim [--user NAME] [--dry-run]
+recalibrates a profile from its raw recordings so still frames at the start
+and end are ignored (same pose method; old profile backed up first).
+
 Encryption at rest (utils/secure_store.py, Windows DPAPI):
     python migrate_profiles.py --encrypt [--user NAME]   encrypt existing .npy files in place
     python migrate_profiles.py --decrypt [--user NAME]   back to plain files (e.g. before moving
@@ -39,9 +44,11 @@ from gesture_compare import (
     build_profile_config,
     save_registration,
     _read_config,
+    matching_recording,
+    TEMPORAL_TRIM_METHOD,
 )
 from gesture_capture import TARGET_FRAMES
-from utils.normalize import normalize_gesture, POSE_METHOD_ASPECT, POSE_METHOD_LEGACY
+from utils.normalize import normalize_gesture, aspect_for_method, POSE_METHOD_ASPECT, POSE_METHOD_LEGACY
 from utils import secure_store
 
 SHOWN_KEYS = ("threshold", "finger_state_threshold", "transition_threshold",
@@ -69,8 +76,10 @@ def migrate_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
         return {"user": username, "status": "no_raw_recordings"}
 
     aspect = float(config.get("frame_aspect") or 1.0)
-    poses = [normalize_gesture(r, TARGET_FRAMES, frame_aspect=aspect) for r in raws]
-    new_config = build_profile_config(poses, raws, aspect, POSE_METHOD_ASPECT)
+    trim = config.get("temporal_trim")
+    poses = [normalize_gesture(matching_recording(r, trim), TARGET_FRAMES, frame_aspect=aspect)
+             for r in raws]
+    new_config = build_profile_config(poses, raws, aspect, POSE_METHOD_ASPECT, trim)
 
     old_anthro = (config.get("anthropometric_profile") or {}).get("tolerance")
     report = {
@@ -91,8 +100,54 @@ def migrate_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
     # face_embedding=None keeps the enrolled face (see save_registration).
     save_registration(username, poses, templates_dir=templates_dir,
                       raw_samples=raws, frame_aspect=aspect,
-                      pose_method=POSE_METHOD_ASPECT)
+                      pose_method=POSE_METHOD_ASPECT, temporal_trim=trim)
     report["status"] = "migrated"
+    report["backup"] = backup
+    return report
+
+
+def retrim_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
+    """
+    Recalibrate one profile with TEMPORAL_TRIM_METHOD from its raw recordings
+    (pose method and face kept). Template-aging anchor and log start afresh.
+
+    Returns:
+        dict like migrate_user() ("retrimmed", "would_retrim",
+        "already_current" or "no_raw_recordings").
+    """
+    username = normalize_username(username)
+    config = _read_config(username, templates_dir)
+    if config.get("temporal_trim") == TEMPORAL_TRIM_METHOD:
+        return {"user": username, "status": "already_current"}
+    n_templates = len(load_all_user_templates(username, templates_dir))
+    raws = load_user_raw_templates(username, n_templates, templates_dir)
+    if raws is None:
+        return {"user": username, "status": "no_raw_recordings"}
+
+    pose_method = config.get("pose_method", POSE_METHOD_LEGACY)
+    aspect = float(config.get("frame_aspect") or 1.0)
+    pose_aspect = aspect_for_method(pose_method, aspect)
+    poses = [normalize_gesture(matching_recording(r, TEMPORAL_TRIM_METHOD), TARGET_FRAMES,
+                               frame_aspect=pose_aspect) for r in raws]
+    new_config = build_profile_config(poses, raws, aspect, pose_method, TEMPORAL_TRIM_METHOD)
+    report = {
+        "user": username,
+        "old": {k: config.get(k) for k in SHOWN_KEYS},
+        "new": {k: new_config.get(k) for k in SHOWN_KEYS},
+        "old_anthro_tolerance": (config.get("anthropometric_profile") or {}).get("tolerance"),
+        "new_anthro_tolerance": new_config["anthropometric_profile"]["tolerance"],
+        "backup": None,
+    }
+    if dry_run:
+        report["status"] = "would_retrim"
+        return report
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = os.path.join(templates_dir, f".backup_{username}_{stamp}")
+    shutil.copytree(os.path.join(templates_dir, username), backup)
+    save_registration(username, poses, templates_dir=templates_dir,
+                      raw_samples=raws, frame_aspect=aspect,
+                      pose_method=pose_method, temporal_trim=TEMPORAL_TRIM_METHOD)
+    report["status"] = "retrimmed"
     report["backup"] = backup
     return report
 
@@ -133,6 +188,8 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--encrypt", action="store_true", help="Encrypt the stored arrays (Windows DPAPI)")
     mode.add_argument("--decrypt", action="store_true", help="Store the arrays as plain .npy again")
+    mode.add_argument("--trim", action="store_true",
+                      help="Recalibrate with the temporal trim (still frames at start/end ignored)")
     args = parser.parse_args(argv)
 
     users = list_registered_users(args.templates_dir)
@@ -163,7 +220,7 @@ def main(argv=None):
     failed = 0
     for user in users:
         try:
-            r = migrate_user(user, args.templates_dir, args.dry_run)
+            r = (retrim_user if args.trim else migrate_user)(user, args.templates_dir, args.dry_run)
         except (OSError, ValueError, FileNotFoundError) as e:
             failed += 1
             print(f"  {user}: ERROR {e}")

@@ -54,6 +54,8 @@ from gesture_compare import (
     load_user_profile,
     compute_dtw_distance,
     _read_config,
+    matching_recording,
+    TEMPORAL_TRIM_METHOD,
 )
 from gesture_auth import evaluate_attempt
 from gesture_capture import TARGET_FRAMES
@@ -67,6 +69,7 @@ CONFIRMED_DISTINCT = ["lib", "res", "saimani", "test", "umesh"]
 VARIANTS = {
     "current": {"pose_method": POSE_METHOD_LEGACY},
     "aspect": {"pose_method": POSE_METHOD_ASPECT},
+    "trim": {"pose_method": POSE_METHOD_LEGACY, "temporal_trim": TEMPORAL_TRIM_METHOD},
 }
 
 
@@ -113,7 +116,8 @@ def load_recordings(user, templates_dir):
 def build_profile(tmp, name, raws, aspect, variant):
     opts = dict(VARIANTS[variant])
     pose_method = opts.get("pose_method", POSE_METHOD_LEGACY)
-    poses = [normalize_gesture(r, TARGET_FRAMES, frame_aspect=aspect_for_method(pose_method, aspect))
+    poses = [normalize_gesture(matching_recording(r, opts.get("temporal_trim")), TARGET_FRAMES,
+                               frame_aspect=aspect_for_method(pose_method, aspect))
              for r in raws]
     save_registration(name, poses, templates_dir=tmp, raw_samples=raws, frame_aspect=aspect, **opts)
     profile = load_user_profile(name, tmp)

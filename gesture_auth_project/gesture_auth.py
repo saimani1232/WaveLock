@@ -39,6 +39,7 @@ from gesture_compare import (
     authenticate_with_details,
     update_templates_if_high_confidence,
     list_registered_users,
+    matching_recording,
 )
 from utils.face_auth import (
     detect_primary_face,
@@ -390,9 +391,11 @@ def evaluate_attempt(recorded_frames, clean_frames, frame_aspect, profile):
         return result
 
     raw = np.asarray(recorded_frames, dtype=np.float64)
-    # Normalise the live attempt exactly like the stored templates.
+    # Normalise the live attempt exactly like the stored templates (same
+    # temporal trim; result["raw"] stays the untrimmed recording).
+    matched = matching_recording(raw, profile.get("temporal_trim"))
     pose_aspect = aspect_for_method(profile.get("pose_method"), frame_aspect)
-    pose = normalize_gesture(raw, TARGET_FRAMES, frame_aspect=pose_aspect)
+    pose = normalize_gesture(matched, TARGET_FRAMES, frame_aspect=pose_aspect)
 
     # Stage 1: face identity across the recording (median + majority vote).
     if profile["face_embedding"] is not None:
@@ -406,7 +409,7 @@ def evaluate_attempt(recorded_frames, clean_frames, frame_aspect, profile):
 
     live_trajectory = None
     if profile["trajectory_templates"] is not None:
-        live_trajectory = extract_wrist_trajectory(raw, frame_aspect, TARGET_FRAMES)
+        live_trajectory = extract_wrist_trajectory(matched, frame_aspect, TARGET_FRAMES)
 
     granted, distance, best_idx, details = authenticate_with_details(
         pose,
@@ -424,7 +427,7 @@ def evaluate_attempt(recorded_frames, clean_frames, frame_aspect, profile):
         stored_trajectories=profile["trajectory_templates"],
         trajectory_threshold=profile["trajectory_threshold"],
         live_kinematic_sequence=prepare_kinematic_sequence(
-            raw, TARGET_FRAMES, frame_aspect=pose_aspect),
+            matched, TARGET_FRAMES, frame_aspect=pose_aspect),
     )
 
     result.update({
