@@ -73,7 +73,7 @@ from utils import attempt_limit as al
 from web_backend.camera import CameraError, FACE_LOCK
 from utils import liveness as lv
 
-HAND_WAIT_AFTER_CHALLENGE_SEC = 3.0   # time to raise the hand for the gesture
+HAND_WAIT_AFTER_CHALLENGE_SEC = lv.HAND_WAIT_AFTER_CHALLENGE_SEC
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACE_REQUIRED_FRAMES = 5          # same burst as gesture_capture / enroll_face
@@ -397,6 +397,7 @@ class WaveLockService:
             a["error"] = None
             a["attempt"] += 1
             a["job"] = job
+            a["get_ready_until"] = None
         threading.Thread(target=self._challenge_worker, args=(a, job), daemon=True).start()
         return self._auth_state()
 
@@ -421,7 +422,14 @@ class WaveLockService:
         if ch.state != "passed":
             self._liveness_failed(a, ch.reason or "liveness_failed")
             return
-        # Passed: start the gesture recording straight away (a hand must be up).
+        # Passed: a short lead-in to move from the challenge pose to the
+        # gesture's starting posture, then the recording (a hand must be up).
+        with self._lock:
+            a["get_ready_until"] = time.time() + lv.GESTURE_LEAD_IN_SEC
+        while time.time() < a["get_ready_until"] and self.auth is a:
+            time.sleep(0.05)
+        if self.auth is not a:
+            return
         end = time.time() + HAND_WAIT_AFTER_CHALLENGE_SEC
         while not self.camera.hand_visible and time.time() < end and self.auth is a:
             time.sleep(0.05)
@@ -435,6 +443,7 @@ class WaveLockService:
         with self._lock:
             a["phase"] = "recording"
             a["rec"] = rec
+            a["get_ready_until"] = None
         self._auth_worker(a, rec)
 
     def _liveness_failed(self, a, reason):
@@ -586,6 +595,8 @@ class WaveLockService:
             "locked_for": round(al.seconds_locked(a["username"], self.templates_dir), 1),
             "recording": self.camera.recording_progress() if a["phase"] == "recording" else None,
             "challenge": self.camera.challenge_state() if a["phase"] == "challenge" else None,
+            "get_ready": (round(max(0.0, a["get_ready_until"] - time.time()), 1)
+                          if a["phase"] == "challenge" and a.get("get_ready_until") else None),
             "liveness": self.liveness,
         }
         if self.debug:

@@ -36,6 +36,11 @@ import numpy as np
 from utils.normalize import normalize_spatial
 
 CHALLENGE_TIMEOUT_SEC = 12.0
+# After a passed challenge the hand still shows the finger count. A short
+# lead-in lets the user move to the gesture's starting posture before the
+# recording starts (otherwise the transition is recorded as gesture).
+GESTURE_LEAD_IN_SEC = 1.5
+HAND_WAIT_AFTER_CHALLENGE_SEC = 3.0   # after the lead-in: time to raise the hand
 HOLD_SEC = 0.6                # finger count held continuously this long
 # Yaw proxy change needed for a head turn. Geometry: the nose tip sits about
 # 0.55 inter-eye distances in front of the eye plane, so a ~15 degree turn

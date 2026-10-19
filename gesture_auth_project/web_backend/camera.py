@@ -357,6 +357,7 @@ class CameraService:
         prev = time.time()
         try:
             while not self._stop.is_set():
+                rec = self._recording                 # only frames read after the start
                 t_read = time.perf_counter()
                 ok, frame = source.read()
                 t_proc = time.perf_counter()
@@ -369,7 +370,6 @@ class CameraService:
                 landmarks = tracker.process(frame)
                 now = time.time()
 
-                rec = self._recording
                 if rec is None:                       # face thread sleeps through recordings
                     with self._face_cond:             # hand the frame over; never wait
                         self._face_frame = clean

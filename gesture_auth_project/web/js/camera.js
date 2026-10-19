@@ -246,7 +246,13 @@ export class CameraPanel {
     this.ringBar.setAttribute("stroke-dashoffset", mode === "granted" || mode === "denied" ? "0" : "100");
     void this.ringBar.getBoundingClientRect();        // apply before re-enabling the transition
     this.ringBar.style.transition = "";
-    if (mode === "challenge" && data.step) {
+    if (mode === "challenge" && data.getReady != null) {
+      // Challenge passed: a moment to move into the gesture's starting posture.
+      add(this.center, h("div", { class: "cam-challenge" },
+        h("div", { class: "ch-big" }, h("b", null, String(Math.max(1, Math.ceil(data.getReady)))), icon("wave")),
+        h("strong", null, "Passed: get ready for your gesture"),
+        h("small", null, "Move your hand to where your gesture starts")));
+    } else if (mode === "challenge" && data.step) {
       // Liveness instruction, large and centred: a random request a photo or
       // a recorded video cannot follow.
       const st = data.step;

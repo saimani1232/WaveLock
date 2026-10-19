@@ -56,7 +56,10 @@ from gesture_capture import (
 )
 from utils.camera_utils import print_camera_diagnostics
 from utils.attempt_limit import record_attempt, seconds_locked
-from utils.liveness import new_challenge, count_extended_fingers, yaw_proxy
+from utils.liveness import (
+    new_challenge, count_extended_fingers, yaw_proxy,
+    GESTURE_LEAD_IN_SEC, HAND_WAIT_AFTER_CHALLENGE_SEC,
+)
 
 
 # ============================================================================
@@ -625,7 +628,7 @@ def main():
         # ─── State ────────────────────────────────────────────────────
         is_recording = False
         recording_start_time = 0.0
-        skip_record_frame = False   # the frame that passed the liveness challenge is not recorded
+        ready_until = None          # end of the get-ready lead-in after a passed challenge
         recorded_frames = []
         clean_frames_recorded = []
         show_result = False
@@ -755,15 +758,16 @@ def main():
             # ─── Liveness Challenge ───────────────────────────────────
             if challenge is not None:
                 now = time.time()
-                challenge.feed_hand(count_extended_fingers(
-                    extract_landmarks(results.multi_hand_landmarks[0]) if hand_visible else None), now)
-                if face_enrolled:
-                    face_row, _ = detect_primary_face(clean_frame)
-                    if face_row is not None:
-                        challenge_face = clean_frame
-                    challenge.feed_face(yaw_proxy(face_row), now)
-                challenge.tick(now)
-                step = challenge.step
+                if challenge.state == "running":
+                    challenge.feed_hand(count_extended_fingers(
+                        extract_landmarks(results.multi_hand_landmarks[0]) if hand_visible else None), now)
+                    if face_enrolled:
+                        face_row, _ = detect_primary_face(clean_frame)
+                        if face_row is not None:
+                            challenge_face = clean_frame
+                        challenge.feed_face(yaw_proxy(face_row), now)
+                    challenge.tick(now)
+                step = challenge.step if challenge.state == "running" else None
                 if step is not None:
                     text = (f"SHOW {step['count']} FINGER{'S' if step['count'] > 1 else ''} (NO THUMB)"
                             if step["kind"] == "fingers" else
@@ -775,30 +779,42 @@ def main():
                     cv2.putText(frame, f"Liveness check {challenge.index + 1}/{len(challenge.steps)}"
                                        f"  -  {left_s:.0f} s left", (20, h - 14),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
-                if challenge.state == "passed" and face_enrolled:
-                    # bind the challenge to the enrolled face (not a helper's)
-                    match = (challenge_face is not None and
-                             verify_face(challenge_face, profile["face_embedding"])[0])
-                    if not match:
-                        challenge.state = "failed"
-                        challenge.reason = ("liveness_no_face" if challenge_face is None
-                                            else "liveness_face_mismatch")
+                if challenge.state == "passed" and ready_until is None:
+                    if face_enrolled:
+                        # bind the challenge to the enrolled face (not a helper's)
+                        match = (challenge_face is not None and
+                                 verify_face(challenge_face, profile["face_embedding"])[0])
+                        if not match:
+                            challenge.state = "failed"
+                            challenge.reason = ("liveness_no_face" if challenge_face is None
+                                                else "liveness_face_mismatch")
+                    if challenge.state == "passed":
+                        ready_until = now + GESTURE_LEAD_IN_SEC
+                        print("  [LIVE] Passed. Get ready: move your hand to where your gesture starts.")
                 failed_reason = None
                 if challenge.state == "passed":
-                    challenge = None
-                    if hand_visible:
+                    if now < ready_until:
+                        cv2.rectangle(frame, (0, h - 70), (w, h), (0, 0, 0), -1)
+                        cv2.putText(frame, f"PASSED - GET READY: GESTURE IN {ready_until - now:.1f} s",
+                                    (20, h - 38), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                                    (80, 220, 120), 2, cv2.LINE_AA)
+                        cv2.putText(frame, "Move your hand to where your gesture starts",
+                                    (20, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                    (220, 220, 220), 1, cv2.LINE_AA)
+                    elif hand_visible:
+                        challenge, ready_until = None, None
                         is_recording = True
-                        skip_record_frame = True
                         recording_start_time = time.time()
                         recorded_frames = []
                         clean_frames_recorded = []
                         result = new_result()
-                        print(f"  [LIVE] Passed. [REC] Perform your gesture for {RECORDING_DURATION_SEC} seconds...")
-                    else:
+                        print(f"  [REC] Perform your gesture for {RECORDING_DURATION_SEC} seconds...")
+                    elif now >= ready_until + HAND_WAIT_AFTER_CHALLENGE_SEC:
+                        challenge, ready_until = None, None
                         failed_reason = "liveness_no_hand_for_gesture"
                 elif challenge.state == "failed":
                     failed_reason = challenge.reason
-                    challenge = None
+                    challenge, ready_until = None, None
                 if failed_reason is not None:
                     reason = failed_reason
                     result = new_result()
@@ -820,11 +836,7 @@ def main():
 
             # ─── Recording Logic ──────────────────────────────────────
             remaining, progress = 0.0, 0.0
-            if is_recording and skip_record_frame:
-                # This frame still shows the challenge pose (the hand landmarks
-                # were read before the challenge passed): start with the next.
-                skip_record_frame = False
-            elif is_recording:
+            if is_recording:
                 elapsed = time.time() - recording_start_time
                 remaining = max(0.0, RECORDING_DURATION_SEC - elapsed)
                 progress = min(1.0, elapsed / RECORDING_DURATION_SEC)

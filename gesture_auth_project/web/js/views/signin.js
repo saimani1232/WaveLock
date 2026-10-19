@@ -239,7 +239,7 @@ export default {
       const stateOf = (key) => {
         if (key === "liveness") {
           if (!s.liveness) return "off";
-          if (s.phase === "challenge") return "active";
+          if (s.phase === "challenge") return s.get_ready != null ? "pass" : "active";
           if (s.phase === "result" && r && !r.too_few_frames) return r.liveness_failed ? "fail" : "pass";
           if (s.phase === "recording" || s.phase === "processing") return "pass";
           return "";
@@ -302,6 +302,11 @@ export default {
         }, icon("record"), cam && cam.live ? "Start recording" : "Waiting for the camera…",
           cam && cam.live && !(s.locked_for > 0) ? kbdHint("R") : null));
         cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked: wait for the timer" : "Ready: press R to record" });
+      } else if (s.phase === "challenge" && s.get_ready != null) {
+        add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("wave")),
+          h("div", null, h("h3", null, "Liveness passed: get ready"),
+            h("p", { class: "small muted" }, "Move your hand to where your gesture starts. The recording begins in a moment."))));
+        cam && cam.setMode("challenge", { getReady: s.get_ready });
       } else if (s.phase === "challenge" && s.challenge) {
         const ch = s.challenge, st = ch.steps[Math.min(ch.index, ch.steps.length - 1)];
         add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("liveness")),
@@ -309,7 +314,7 @@ export default {
             h("p", { class: "small muted" }, st.kind === "fingers"
               ? `Show ${st.count} finger${st.count === 1 ? "" : "s"} (index to pinky, no thumb) and hold still.`
               : `Turn your head ${st.direction === "left" ? "to the left" : "to the right"} a little, then look back.`,
-              " The gesture recording starts right after."))));
+              " Then a short get-ready pause, and the gesture recording."))));
         cam && cam.setMode("challenge", { step: st, index: ch.index, total: ch.steps.length, remaining: ch.remaining });
       } else if (s.phase === "recording") {
         add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("wave")),
@@ -375,7 +380,8 @@ export default {
       seenOnServer = true;
       const ch = s.challenge;
       const key = `${s.phase}|${s.attempt}|${s.error}|${Math.ceil(s.locked_for)}|${cam && cam.live}` +
-        (ch ? `|${ch.index}|${Math.ceil(ch.remaining)}` : "");
+        (ch ? `|${ch.index}|${Math.ceil(ch.remaining)}` : "") +
+        (s.get_ready != null ? `|ready${Math.ceil(s.get_ready)}` : "");
       if (key !== lastKey) { lastKey = key; render(s); }
       if (s.phase === "recording" && s.recording && cam) cam.setProgress(s.recording);
     });
