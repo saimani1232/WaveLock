@@ -21,6 +21,7 @@ import os
 import re
 import json
 import shutil
+from datetime import datetime
 import tempfile
 
 import numpy as np
@@ -150,6 +151,11 @@ AGING_CONFIDENCE_RATIO = 0.70              # DTW must be <= 70% of threshold
 AGING_MIN_FACE_CONFIDENCE = 0.70           # face_confidence (mapped scale, ~cosine 0.59)
 AGING_MIN_ANTHRO_CONFIDENCE = 0.85
 AGING_MIN_KINEMATIC_CONFIDENCE = 0.65
+# Drift anchor: each update is checked against the templates as they were
+# before the FIRST update (anchor_N.npy, written lazily), so many small
+# updates cannot walk the set away from the enrolled gesture.
+AGING_ANCHOR_RATIO = 1.0                   # min DTW to the anchor <= ratio x anchor threshold
+AGING_LOG_MAX = 20                         # config.json["aging_log"] keeps the last N events
 
 # Multimodal soft consensus: a verified face with RAW cosine >= this value
 # may admit borderline hand anatomy (see authenticate_with_details).
@@ -1052,9 +1058,10 @@ def load_user_anthropometric_profile(username, stored_templates=None,
     Load the user's anthropometric hand geometry profile.
 
     If present in config.json with current method 'metacarpal_invariant_v2', loads it.
-    If missing or older method, re-calibrates from stored templates and updates config.json.
+    If missing or older method, re-calibrates from stored templates in memory.
+    Signing in never writes config.json (it used to upgrade the cached
+    profile here); re-registering or migrate_profiles.py stores a new one.
     """
-    config_path = os.path.join(templates_dir, username, "config.json")
     config = _read_config(username, templates_dir)
     profile = config.get("anthropometric_profile")
     if isinstance(profile, dict) and profile.get("method") == "metacarpal_invariant_v2":
@@ -1067,16 +1074,7 @@ def load_user_anthropometric_profile(username, stored_templates=None,
             stored_templates = []
 
     if stored_templates:
-        new_profile = calibrate_anthropometric_profile(stored_templates)
-        if os.path.exists(config_path):
-            # Upgrade the cached profile in place. A failed write only means
-            # recalibrating again next time, so it must not block login.
-            config["anthropometric_profile"] = new_profile
-            try:
-                _atomic_write_json(config_path, config)
-            except OSError as e:
-                print(f"  Warning: could not update {config_path}: {e}")
-        return new_profile
+        return calibrate_anthropometric_profile(stored_templates)
 
     # Fallback to neutral default
     return {
@@ -1772,6 +1770,47 @@ def set_face_enrolled_flag(username, templates_dir=TEMPLATES_DIR):
 # ADAPTIVE TEMPLATE AGING
 # ============================================================================
 
+def _aging_anchor(username, stored_templates, config, threshold,
+                  templates_dir=TEMPLATES_DIR):
+    """
+    The templates aging is anchored to, and their DTW threshold.
+
+    The anchor is written the first time a template is replaced (the set as
+    it was then, i.e. the enrolment for profiles that never aged before) and
+    recorded in config["aging_anchor"]. Re-registration and migration start
+    a fresh folder, so the anchor always matches the current pose method.
+
+    Returns:
+        (templates, threshold, created) or (None, None, False) when a
+        recorded anchor cannot be read (aging is then skipped: fail closed).
+    """
+    user_dir = os.path.join(templates_dir, username)
+    info = config.get("aging_anchor")
+    if info is not None:
+        try:
+            n = int(info["count"])
+            anchor = [load_gesture_template(os.path.join(user_dir, f"anchor_{i}.npy"))
+                      for i in range(1, n + 1)]
+            return anchor, float(info["threshold"]), False
+        except (KeyError, TypeError, ValueError, OSError):
+            return None, None, False
+
+    for i, template in enumerate(stored_templates, start=1):
+        _atomic_save_npy(os.path.join(user_dir, f"anchor_{i}.npy"), template)
+    config["aging_anchor"] = {
+        "count": len(stored_templates),
+        "threshold": round(float(config.get("threshold", threshold)), 4),
+        "created": datetime.now().isoformat(timespec="seconds"),
+    }
+    return list(stored_templates), config["aging_anchor"]["threshold"], True
+
+
+def _append_aging_log(config, entry):
+    log = config.get("aging_log")
+    log = list(log) if isinstance(log, list) else []
+    log.append(dict(entry, time=datetime.now().isoformat(timespec="seconds")))
+    config["aging_log"] = log[-AGING_LOG_MAX:]
+
 def update_templates_if_high_confidence(
     username, live_gesture, best_distance, threshold,
     stored_templates, templates_dir=TEMPLATES_DIR,
@@ -1794,6 +1833,12 @@ def update_templates_if_high_confidence(
     enrolled), hand anthropometry and kinematics all confirm identity with
     high confidence (face_confidence >= 0.70, anthro >= 0.85,
     kinematic >= 0.65). This prevents impostor template poisoning attacks.
+
+    Drift anchor: the live gesture must also be within AGING_ANCHOR_RATIO x
+    the anchor threshold of the templates as they were before the first
+    update (see _aging_anchor), so repeated updates cannot drift away from
+    the enrolled gesture. Replacements and anchor refusals are logged in
+    config["aging_log"] (last AGING_LOG_MAX events).
 
     For users registered with raw landmarks, live_raw is required so the
     raw recording set stays aligned with the pose templates; otherwise
@@ -1851,6 +1896,25 @@ def update_templates_if_high_confidence(
         # The live gesture is actually worse than the current worst — skip
         return None
 
+    # Safeguard 3: drift anchor (the original enrolment, see _aging_anchor).
+    user_dir = os.path.join(templates_dir, username)
+    config_path = os.path.join(user_dir, "config.json")
+    old_config = _read_config(username, templates_dir)
+    anchor, anchor_threshold, _ = _aging_anchor(
+        username, stored_templates, old_config, threshold, templates_dir
+    )
+    if anchor is None:
+        return None
+    anchor_distance = min(compute_dtw_distance(live_gesture, a) for a in anchor)
+    if anchor_distance > AGING_ANCHOR_RATIO * anchor_threshold:
+        _append_aging_log(old_config, {
+            "event": "refused_anchor",
+            "anchor_distance": round(float(anchor_distance), 4),
+            "anchor_threshold": anchor_threshold,
+        })
+        _atomic_write_json(config_path, old_config)
+        return None
+
     updated_templates = list(stored_templates)
     updated_templates[worst_idx] = live_gesture
     updated_raw = None
@@ -1858,9 +1922,6 @@ def update_templates_if_high_confidence(
         updated_raw = list(raw_templates)
         updated_raw[worst_idx] = np.asarray(live_raw, dtype=np.float64)
 
-    user_dir = os.path.join(templates_dir, username)
-    config_path = os.path.join(user_dir, "config.json")
-    old_config = _read_config(username, templates_dir)
     new_config = build_profile_config(
         updated_templates, updated_raw, old_config.get("frame_aspect"),
         old_config.get("pose_method", POSE_METHOD_LEGACY),
@@ -1870,6 +1931,13 @@ def update_templates_if_high_confidence(
     config = dict(old_config)
     config.update(new_config)
     config["last_template_update"] = worst_idx + 1
+    _append_aging_log(config, {
+        "event": "replaced",
+        "template": worst_idx + 1,
+        "distance": round(float(best_distance), 4),
+        "anchor_distance": round(float(anchor_distance), 4),
+        "new_threshold": config["threshold"],
+    })
     config["face_enrolled"] = os.path.exists(os.path.join(user_dir, "face_embedding.npy"))
 
     if updated_raw is not None:
@@ -1888,6 +1956,7 @@ def update_templates_if_high_confidence(
         "new_avg_distance": live_avg,
         "new_threshold": config["threshold"],
         "new_consistency": config["consistency_score"],
+        "anchor_distance": float(anchor_distance),
     }
 
 
