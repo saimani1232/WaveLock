@@ -17,6 +17,21 @@ Root causes fixed from original evaluate_biometric_security.py:
    trajectories enough to fail macro gates unrealistically. Fixed: reduced noise
    to sigma=0.005 (empirically closer to MediaPipe's actual tracking jitter on
    the C270 webcam).
+
+Semester-2 corrections (far_audit_2026-10-02 section 5, report Section 6.2 item 4):
+4. Results are reported per attack type with 95 % Clopper-Pearson intervals;
+   there is no pooled FAR / HTER any more (mixing easy and hard attacks hid
+   the hard ones).
+5. The similar-hand generator froze its "hesitation pause" BEFORE adding
+   noise, which erased the pause; it now adds noise first and freezes after.
+6. Genuine probes are held out: a variation of template k is checked against
+   a profile calibrated from the OTHER templates (leave-one-out), not against
+   a profile that contains its own source.
+7. The copied-gesture cohorts are labelled as a PERFECT-REPLAY attacker model
+   (the attacker reproduces the enrolled motion exactly, only the hand
+   differs), which is far stronger than a real observer.
+
+All cohorts remain SIMULATED. Real-recording results: evaluate_real_recordings.py.
 """
 
 import sys
@@ -25,6 +40,7 @@ from collections import Counter
 
 import numpy as np
 from scipy.interpolate import interp1d
+from scipy.stats import beta
 
 from gesture_compare import (
     TEMPLATES_DIR,
@@ -37,7 +53,12 @@ from gesture_compare import (
     load_user_segment_threshold,
     load_user_anthropometric_profile,
     authenticate_with_details,
+    compute_threshold_from_samples,
+    compute_finger_state_threshold_details,
+    compute_transition_threshold_details,
+    compute_segment_threshold_details,
 )
+from utils.anthropometrics import calibrate_anthropometric_profile
 from utils.kinematics import calibrate_kinematic_profile
 from cohort_library import generate_cohort_library
 
@@ -86,6 +107,42 @@ def load_benchmark_user(argv=None, description=""):
         "anthro_prof": load_user_anthropometric_profile(username, templates, d),
         "kin_prof": calibrate_kinematic_profile(templates),
     }
+
+
+def held_out_profile(user, k):
+    """
+    Profile calibrated from every template EXCEPT template k, so a genuine
+    probe built from template k is never compared with its own source.
+    Same calibration functions as registration (pose-template benchmark mode).
+    """
+    rest = [t for i, t in enumerate(user["templates"]) if i != k]
+    if len(rest) < 2:                      # too few templates to hold one out
+        return user
+    threshold, _ = compute_threshold_from_samples(rest)
+    return {
+        "username": user["username"],
+        "templates": rest,
+        "threshold": threshold,
+        "fst": compute_finger_state_threshold_details(rest)["threshold"],
+        "tt": compute_transition_threshold_details(rest)["threshold"],
+        "st": compute_segment_threshold_details(rest)["threshold"],
+        "anthro_prof": calibrate_anthropometric_profile(rest),
+        "kin_prof": calibrate_kinematic_profile(rest),
+    }
+
+
+def clopper_pearson(k, n, alpha=0.05):
+    """Exact two-sided 95 % interval (in %) for k accepted out of n."""
+    if n == 0:
+        return float("nan"), float("nan")
+    lo = 0.0 if k == 0 else beta.ppf(alpha / 2, k, n - k + 1)
+    hi = 1.0 if k == n else beta.ppf(1 - alpha / 2, k + 1, n - k)
+    return 100 * lo, 100 * hi
+
+
+def rate_text(k, n):
+    lo, hi = clopper_pearson(k, n)
+    return f"{k}/{n} ({100 * k / n:.0f}%, CI {lo:.0f}-{hi:.0f})"
 
 
 def generate_genuine_variations(templates, count=30, seed=42):
@@ -218,15 +275,17 @@ def generate_similar_hand_impostors(templates, count=30, seed=202):
         for joint in [2, 3, 4]:
             base[:, joint] = base[:, 1] + (base[:, joint] - base[:, 1]) * thumb_scale
         
-        # Involuntary imitation hesitation: variable pause
+        # Involuntary imitation hesitation: variable pause. Noise is added
+        # FIRST and the pause frozen AFTER it; freezing before the noise (the
+        # semester-1 order) let the noise erase the pause (far_audit F4).
         dwell_start = rng.randint(15, 36)
         dwell_len = rng.randint(6, 12)
         dwell_end = min(base.shape[0] - 5, dwell_start + dwell_len)
-        base[dwell_start:dwell_end] = base[dwell_start]
         
         # Add slight execution noise
         noise = rng.normal(0, 0.005, base.shape)
         base += noise
+        base[dwell_start:dwell_end] = base[dwell_start]
         
         # Re-normalize
         for f in range(base.shape[0]):
@@ -350,6 +409,10 @@ def main():
     print("  1. face_match=None (disables face soft-consensus override)")
     print("  2. Impostor generators perturb ALL anthropometric landmarks")
     print("  3. Genuine noise reduced to sigma=0.005 (realistic C270 jitter)")
+    print("  4. Per-attack rates with 95% Clopper-Pearson intervals (no pooled FAR)")
+    print("  5. Similar-hand pause frozen after the noise (survives)")
+    print("  6. Genuine probes checked against held-out profiles (leave-one-out)")
+    print("  7. Copied-gesture cohorts = PERFECT-REPLAY attacker (exact enrolled motion)")
     print()
 
     # Generate Cohorts (30 trials per cohort = 150 trials total)
@@ -363,9 +426,9 @@ def main():
     cohorts = {
         "1. Genuine User Variations": generate_genuine_variations(templates, count=N_TRIALS),
         "2. Zero-Effort Impostors": c2_impostors,
-        "3. Shoulder-Surfers (Distinct Hands)": generate_distinct_hand_impostors(templates, count=N_TRIALS),
-        "4. Shoulder-Surfers (Similar Hands)": generate_similar_hand_impostors(templates, count=N_TRIALS),
-        "5. Shoulder-Surfers (Jerky / Hesitant)": generate_jerky_kinematic_impostors(templates, count=N_TRIALS),
+        "3. Perfect replay, distinct hand": generate_distinct_hand_impostors(templates, count=N_TRIALS),
+        "4. Perfect replay, similar hand": generate_similar_hand_impostors(templates, count=N_TRIALS),
+        "5. Perfect replay, jerky / hesitant": generate_jerky_kinematic_impostors(templates, count=N_TRIALS),
     }
 
     # Evaluation results accumulator
@@ -377,9 +440,13 @@ def main():
         full_accepts = 0
         reasons = []
         
-        for sample in test_cases:
+        genuine_cohort = cohort_name.startswith("1.")
+        for k, sample in enumerate(test_cases):
+            # genuine variation k comes from template k % n: hold that one out
+            prof = held_out_profile(user, k % len(templates)) if genuine_cohort else user
             res = evaluate_trial(
-                sample, templates, threshold, fst, tt, st, anthro_prof, kin_prof
+                sample, prof["templates"], prof["threshold"], prof["fst"], prof["tt"],
+                prof["st"], prof["anthro_prof"], prof["kin_prof"]
             )
             if res["macro_passed"]:
                 macro_accepts += 1
@@ -398,51 +465,28 @@ def main():
             "common_reasons": reasons[:5],
         }
 
-    # Print Detailed Cohort Breakdown
-    print("\n" + "=" * 75)
-    print(f"{'Cohort / Test Scenario':<38} | {'Macro Only':<12} | {'+ Anatomy':<12} | {'Full M-Modal':<12}")
-    print("-" * 75)
-
+    # Per-cohort table: acceptance rate with 95 % Clopper-Pearson interval
+    print("\n" + "=" * 112)
+    print(f"{'Cohort (SIMULATED)':<38} | {'Macro Only':<22} | {'+ Anatomy':<22} | {'Full (gesture+hand)':<22}")
+    print("-" * 112)
     for name, data in results_by_cohort.items():
         total = data["total"]
-        m_rate = f"{data['macro_accepts']}/{total} ({data['macro_accepts']/total:.0%})"
-        a_rate = f"{data['anthro_accepts']}/{total} ({data['anthro_accepts']/total:.0%})"
-        f_rate = f"{data['full_accepts']}/{total} ({data['full_accepts']/total:.0%})"
-        print(f"{name:<38} | {m_rate:<12} | {a_rate:<12} | {f_rate:<12}")
+        cells = [rate_text(data[k], total) for k in ("macro_accepts", "anthro_accepts", "full_accepts")]
+        print(f"{name:<38} | {cells[0]:<22} | {cells[1]:<22} | {cells[2]:<22}")
+    print("=" * 112)
 
-    # Compute Global Biometric Metrics (FAR & FRR)
-    genuine_data = results_by_cohort["1. Genuine User Variations"]
-    gen_total = genuine_data["total"]
-    frr_macro = (gen_total - genuine_data["macro_accepts"]) / gen_total
-    frr_anthro = (gen_total - genuine_data["anthro_accepts"]) / gen_total
-    frr_full = (gen_total - genuine_data["full_accepts"]) / gen_total
+    genuine = results_by_cohort["1. Genuine User Variations"]
+    g_total = genuine["total"]
+    print("\n  ACCEPTANCE RATES PER ATTACK (SIMULATED; each attack reported separately):")
+    print(f"  Genuine false rejection rate (held-out probes), full system: "
+          f"{rate_text(g_total - genuine['full_accepts'], g_total)}")
+    for name, data in results_by_cohort.items():
+        if name.startswith("1."):
+            continue
+        print(f"  {name:<38} accepted (full): {rate_text(data['full_accepts'], data['total'])}")
+    print("  Perfect replay = the attacker reproduces the enrolled motion exactly; a")
+    print("  human observer is weaker. Validate with evaluate_real_recordings.py.")
 
-    imp_total = sum(data["total"] for name, data in results_by_cohort.items() if not name.startswith("1."))
-    imp_macro = sum(data["macro_accepts"] for name, data in results_by_cohort.items() if not name.startswith("1."))
-    imp_anthro = sum(data["anthro_accepts"] for name, data in results_by_cohort.items() if not name.startswith("1."))
-    imp_full = sum(data["full_accepts"] for name, data in results_by_cohort.items() if not name.startswith("1."))
-
-    far_macro = imp_macro / imp_total
-    far_anthro = imp_anthro / imp_total
-    far_full = imp_full / imp_total
-
-    print("=" * 75)
-    print(f"\n  EMPIRICAL METRICS SUMMARY (150 Trials, 120 Impostor Attempts):")
-    print("=" * 75)
-    print(f"  Configuration 1 [Macro Gates Only]:")
-    print(f"    - False Rejection Rate (FRR): {frr_macro:.1%}")
-    print(f"    - False Acceptance Rate (FAR): {far_macro:.1%}")
-    print()
-    print(f"  Configuration 2 [Macro + Hand Anatomy]:")
-    print(f"    - False Rejection Rate (FRR): {frr_anthro:.1%}")
-    print(f"    - False Acceptance Rate (FAR): {far_anthro:.1%}")
-    print()
-    print(f"  Configuration 3 [Full Multi-Modal: Macro + Anatomy + Kinematics]:")
-    print(f"    - False Rejection Rate (FRR): {frr_full:.1%}")
-    print(f"    - False Acceptance Rate (FAR): {far_full:.1%}")
-    print(f"    - Half Total Error Rate (HTER): {(far_full + frr_full)/2:.1%}")
-    print("=" * 75)
-    
     # Print common failure reasons per cohort
     print("\n  Common failure reasons per impostor cohort:")
     for name, data in results_by_cohort.items():

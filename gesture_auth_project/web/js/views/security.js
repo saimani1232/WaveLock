@@ -46,7 +46,7 @@ export default {
         notice("warn", "alert", h("strong", null, "Profile changes need confirmation only. "),
           "Re-registering a username or replacing a face does not require the owner to sign in first (same as the desktop tools)."),
         notice("info", "flask", h("strong", null, "Evaluation status. "),
-          "Security results so far are SIMULATED (synthetic attackers) plus an informal real-user test. Real-user FAR/FRR is a semester-2 deliverable.")));
+          "Attack results are SIMULATED (synthetic attackers, perfect replay). Real enrolment recordings give genuine acceptance and zero-effort rejection only (evaluate_real_recordings.py); imitation, photo and replay attacks by real people have not been recorded.")));
 
     // ------------------------------------------------------------ activity log
     const filter = h("select", { class: "select", "aria-label": "Filter by user" }, h("option", { value: "" }, "All users"));
@@ -119,7 +119,7 @@ export default {
       add(root, h("div", { class: "card stack" },
         h("div", { class: "card-head" },
           h("div", null, h("div", { class: "dev-tag" }, icon("code"), "Developer mode"), h("h2", null, "SIMULATED benchmarks"),
-            h("div", { class: "sub" }, "Synthetic attackers built from the user's own templates. Not real-world FAR/FRR."))),
+            h("div", { class: "sub" }, "Synthetic attackers built from the user's own templates, reported per attack. Not real-world error rates."))),
         h("div", { class: "row" }, userSel, kindSel, runBtn), out));
       try {
         const b = await api.benchmarkStatus();
