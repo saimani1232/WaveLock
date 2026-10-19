@@ -933,6 +933,27 @@ def trim_still_frames(raw, keep_from=TRIM_KEEP_FROM, keep_to=TRIM_KEEP_TO,
     return raw[a:b]
 
 
+# ============================================================================
+# CHECK LEVEL (semester 2, chosen at registration)
+# ============================================================================
+# "relaxed" profiles leave the kinematic check (rhythm, jerk, mid-gesture
+# pause) out of the decision; face, liveness, gesture gates and hand anatomy
+# are unchanged, and template aging still requires good kinematics. The
+# kinematic check is what rejects a hesitant imitator, so a relaxed profile
+# is weaker against imitation. Profiles without the key are "standard".
+CHECK_LEVEL_STANDARD = "standard"
+CHECK_LEVEL_RELAXED = "relaxed"
+CHECK_LEVELS = (CHECK_LEVEL_STANDARD, CHECK_LEVEL_RELAXED)
+
+
+def check_level_of(config):
+    """The profile's check level; unknown values are refused (fail closed)."""
+    level = config.get("check_level", CHECK_LEVEL_STANDARD)
+    if level not in CHECK_LEVELS:
+        raise ValueError(f"Unknown check_level {level!r} in config.json.")
+    return level
+
+
 def matching_recording(raw, temporal_trim=None):
     """The part of a raw recording a profile matches on (see TEMPORAL_TRIM_METHOD)."""
     if temporal_trim is None:
@@ -1277,6 +1298,7 @@ def load_user_profile(username, templates_dir=TEMPLATES_DIR):
             username, templates, templates_dir, matching_raws, pose_aspect
         ),
         "temporal_trim": temporal_trim,
+        "check_level": check_level_of(config),
         "trajectory_threshold": trajectory_threshold,
         "trajectory_templates": trajectory_templates,
         "frame_aspect": frame_aspect,
@@ -1306,7 +1328,8 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
                               live_trajectory=None,
                               stored_trajectories=None,
                               trajectory_threshold=None,
-                              live_kinematic_sequence=None):
+                              live_kinematic_sequence=None,
+                              use_kinematics=True):
     """
     Authenticate a live gesture against stored templates.
 
@@ -1341,6 +1364,8 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
             path gate; skipped unless all three are given.
         live_kinematic_sequence: prepare_kinematic_sequence(raw) output;
             required when kinematic_profile["method"] is the smoothed method.
+        use_kinematics: False for "relaxed" profiles (CHECK_LEVEL_RELAXED):
+            the kinematic result is computed and reported but does not decide.
 
     Returns:
         tuple (granted, best_distance, best_index, details).
@@ -1452,15 +1477,17 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
     passing = [item for item in comparisons if item["passes_gates"]]
 
     # Combined Biometric Identity Verification:
-    passes_biometric = anthro_match and kin_match
-    biometric_fused_score = 0.60 * anthro_conf + 0.40 * kin_conf
+    kin_ok = kin_match or not use_kinematics
+    passes_biometric = anthro_match and kin_ok
+    biometric_fused_score = (0.60 * anthro_conf + 0.40 * kin_conf if use_kinematics
+                             else anthro_conf)
 
     # Multimodal Soft Consensus: a strongly verified face (RAW cosine, not
     # the mapped confidence) with fluent kinematics may admit borderline
     # hand anatomy, e.g. in-air signatures where posture inflates one ratio.
     face_cosine = (face_details or {}).get("score")
     soft_consensus_used = False
-    if (not passes_biometric and kin_match
+    if (not passes_biometric and kin_ok
             and anthro_conf >= SOFT_CONSENSUS_MIN_ANTHRO_CONFIDENCE
             and face_match is True
             and face_cosine is not None
@@ -1478,7 +1505,7 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
         identity_failures.append(_face_failure_reason(face_details))
     if not anthro_match and not soft_consensus_used:
         identity_failures.append("impostor_hand_morphology")
-    if not kin_match:
+    if not kin_ok:
         identity_failures.append("impostor_kinematic_dynamics")
 
     if passing:
@@ -1555,6 +1582,7 @@ def authenticate_with_details(live_gesture, stored_templates, threshold,
         "kinematic_confidence": kin_conf,
         "kinematic_details": kin_details,
         "kinematic_method": kinematic_profile.get("method", "legacy_template_v1"),
+        "kinematics_used": bool(use_kinematics),
         "face_match": face_match,
         "face_confidence": face_confidence,
         "face_details": face_details,
@@ -1630,7 +1658,8 @@ def list_registered_users(templates_dir=TEMPLATES_DIR):
 # ============================================================================
 
 def build_profile_config(samples, raw_samples=None, frame_aspect=None,
-                         pose_method=POSE_METHOD_LEGACY, temporal_trim=None):
+                         pose_method=POSE_METHOD_LEGACY, temporal_trim=None,
+                         check_level=None):
     """
     Calibrate every threshold and biometric baseline from a template set.
 
@@ -1649,12 +1678,15 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None,
             come from matching_recording(raw, temporal_trim); raw_samples are
             the untrimmed recordings and are trimmed here for the wrist path
             and kinematics.
+        check_level: None (key not written: standard) or one of CHECK_LEVELS.
 
     Returns:
         dict ready to be written to config.json (face_enrolled excluded).
     """
     if raw_samples is not None and len(raw_samples) != len(samples):
         raise ValueError("raw_samples must align one-to-one with samples.")
+    if check_level is not None and check_level not in CHECK_LEVELS:
+        raise ValueError(f"check_level must be one of {CHECK_LEVELS}.")
     if raw_samples is not None:
         raw_samples = [matching_recording(r, temporal_trim) for r in raw_samples]
     elif temporal_trim is not None:
@@ -1722,6 +1754,8 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None,
     }
     if temporal_trim is not None:
         config["temporal_trim"] = temporal_trim
+    if check_level is not None:
+        config["check_level"] = check_level
 
     if raw_samples is not None:
         aspect = float(frame_aspect) if frame_aspect else 1.0
@@ -1752,7 +1786,8 @@ def build_profile_config(samples, raw_samples=None, frame_aspect=None,
 def save_registration(username, samples, threshold=None, pairwise_distances=None,
                       templates_dir=TEMPLATES_DIR, raw_samples=None,
                       frame_aspect=None, face_embedding=None,
-                      pose_method=POSE_METHOD_LEGACY, temporal_trim=None):
+                      pose_method=POSE_METHOD_LEGACY, temporal_trim=None,
+                      check_level=None):
     """
     Atomically save a complete multi-sample registration to disk.
 
@@ -1776,6 +1811,7 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
         face_embedding: optional (128,) face embedding.
         pose_method: how `samples` were normalised (see build_profile_config).
         temporal_trim: see build_profile_config (raw_samples stay untrimmed on disk).
+        check_level: see build_profile_config.
 
     Returns:
         str: Path to the user's template directory.
@@ -1785,7 +1821,7 @@ def save_registration(username, samples, threshold=None, pairwise_distances=None
         raise ValueError("Cannot save a registration without samples.")
 
     config = build_profile_config(samples, raw_samples, frame_aspect, pose_method,
-                                  temporal_trim)
+                                  temporal_trim, check_level)
 
     os.makedirs(templates_dir, exist_ok=True)
     user_dir = os.path.join(templates_dir, username)
@@ -2006,6 +2042,7 @@ def update_templates_if_high_confidence(
         updated_templates, updated_raw, old_config.get("frame_aspect"),
         old_config.get("pose_method", POSE_METHOD_LEGACY),
         old_config.get("temporal_trim"),
+        old_config.get("check_level"),
     )
 
     # Merge so unrelated keys survive, then write data before config.

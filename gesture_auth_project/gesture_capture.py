@@ -57,6 +57,7 @@ from gesture_compare import (
     OUTLIER_REJECTION_FACTOR,
     NEW_PROFILE_TEMPORAL_TRIM,
     matching_recording,
+    CHECK_LEVELS,
 )
 from cohort_library import (
     generate_cohort_library,
@@ -628,6 +629,9 @@ def main():
     parser.add_argument("--user", "-u", dest="opt_user", type=str, default=None, help="Username to register")
     parser.add_argument("--camera", "--cam", "-c", dest="camera", type=int, default=None, help="Camera index (default: auto-detect)")
     parser.add_argument("--list-cams", action="store_true", help="List available cameras and exit")
+    parser.add_argument("--check-level", choices=CHECK_LEVELS, default="standard",
+                        help="standard: all checks (default); relaxed: the movement-rhythm "
+                             "(kinematic) check does not decide (weaker against imitation)")
     parser.add_argument("--pose-method", choices=("legacy", "aspect"), default="legacy",
                         help="Pose normalisation: legacy (default) or aspect-corrected x")
     args = parser.parse_args()
@@ -789,6 +793,7 @@ def main():
             raw_samples=raw_samples, frame_aspect=frame_aspect,
             face_embedding=face_embedding, pose_method=pose_method,
             temporal_trim=NEW_PROFILE_TEMPORAL_TRIM,
+            check_level=args.check_level,
         )
         if username in existing_users:
             consume_verification(username, TEMPLATES_DIR)

@@ -63,8 +63,9 @@ function detailsCard(details, result) {
     h("div", { class: "section-label" }, "Hand biometrics"),
     meter(`Anatomy (${an.passing_features || "?"} ratios in range)`, hd.anthro_confidence, null,
       Boolean(hd.anthro_match), { higherBetter: true, max: 1, digits: 2 }),
-    meter(`Rhythm · jerk ${fmtNum(kin.jerk_ratio, 2)}× · pause ${kin.max_mid_dwell}/${kin.allowed_dwell}`,
-      hd.kin_confidence, null, Boolean(hd.kin_match), { higherBetter: true, max: 1, digits: 2 }),
+    meter(`Rhythm · jerk ${fmtNum(kin.jerk_ratio, 2)}× · pause ${kin.max_mid_dwell}/${kin.allowed_dwell}` +
+      (hd.kin_used === false ? " (relaxed profile: not used)" : ""),
+      hd.kin_confidence, null, Boolean(hd.kin_match) || hd.kin_used === false, { higherBetter: true, max: 1, digits: 2 }),
     hd.soft_consensus_used ? notice("warn", "alert", "Soft consensus used: a strong face match admitted borderline hand anatomy.") : null,
     result.template_updated ? notice("info", "refresh", `Template ${result.template_updated} was replaced (adaptive aging).`) : null,
     h("p", { class: "tiny faint" }, `Multimodal display score ${fmtNum(details.multimodal_fused_score, 3)} (not used for the decision).`));
@@ -214,7 +215,7 @@ export default {
         h("div", { class: "stack" }, cam.el,
           h("p", { class: "hint-line" }, icon("info"),
             h("span", null, "Press ", h("span", { class: "kbd" }, "R"), " or ", h("span", { class: "kbd" }, "Space"),
-              state.liveness ? " to start (a short liveness check comes first), " : " to record, ",
+              state.liveness ? " to start (a short liveness check comes first, then press R again to record), " : " to record, ",
               h("span", { class: "kbd" }, "T"), " to try again. Keep your hand and face in the frame. ",
               h("span", { class: "kbd" }, "?"), " shows all shortcuts."))),
         h("div", { class: "stack" },
@@ -300,7 +301,9 @@ export default {
           add(action, h("ol", { class: "tips" },
             h("li", null, "Face the camera so your face is visible."),
             h("li", null, "Show your hand until “Hand detected” appears."),
-            h("li", null, "Start recording and perform your gesture at your normal speed.")));
+            h("li", null, s.liveness
+              ? "Press R, follow the liveness instruction, then press R again and perform your gesture as during registration."
+              : "Start recording and perform your gesture at your normal speed.")));
         }
         add(action, h("button", {
           class: "btn primary lg block", type: "button", "aria-keyshortcuts": "R Space",

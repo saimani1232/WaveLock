@@ -70,6 +70,9 @@ VARIANTS = {
     "current": {"pose_method": POSE_METHOD_LEGACY},
     "aspect": {"pose_method": POSE_METHOD_ASPECT},
     "trim": {"pose_method": POSE_METHOD_LEGACY, "temporal_trim": TEMPORAL_TRIM_METHOD},
+    "relaxed": {"pose_method": POSE_METHOD_LEGACY, "check_level": "relaxed"},
+    "trim_relaxed": {"pose_method": POSE_METHOD_LEGACY, "temporal_trim": TEMPORAL_TRIM_METHOD,
+                     "check_level": "relaxed"},
 }
 
 

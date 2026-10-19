@@ -115,7 +115,7 @@ export default {
     const showAccount = () => {
       dropCam();
       lastKey = "";
-      let pose = "legacy";
+      let pose = "legacy", level = "standard";
       const input = h("input", { class: "input", id: "reg-user", autocomplete: "off", spellcheck: "false",
         placeholder: "letters, digits, _ - .", value: params.get("user") || "" });
       const err = h("div", { class: "error-text", role: "alert" });
@@ -130,6 +130,17 @@ export default {
       const choiceBox = h("div", { class: "choice", role: "group", "aria-label": "Pose normalisation" },
         choice("legacy", "Standard", "The method used by all existing profiles (default)."),
         choice("aspect", "Aspect-corrected (experimental)", "Hand ratios stay stable when the hand tilts. Under evaluation in semester 2."));
+      const levelChoice = (value, title, text) => h("button", {
+        type: "button", "aria-pressed": String(value === level),
+        onclick: (e) => {
+          level = value;
+          for (const b of levelBox.children) b.setAttribute("aria-pressed", "false");
+          e.currentTarget.setAttribute("aria-pressed", "true");
+        },
+      }, h("strong", null, title), h("span", null, text));
+      const levelBox = h("div", { class: "choice", role: "group", "aria-label": "Check level" },
+        levelChoice("standard", "Standard (recommended)", "Every check, including your movement rhythm (kinematics), which rejects people who copy your gesture hesitantly."),
+        levelChoice("relaxed", "Relaxed", "No movement-rhythm check: fewer rejections if your speed varies, but weaker against someone who copies your gesture. Face, liveness, gesture and hand anatomy still apply."));
       const submit = h("button", { class: "btn primary lg", type: "submit" }, "Start enrolment", icon("arrowRight"));
       const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
         e.preventDefault();
@@ -138,7 +149,7 @@ export default {
         submit.disabled = true;
         err.textContent = "";
         try {
-          reg = await api.registerBegin(name, false, pose);
+          reg = await api.registerBegin(name, false, pose, level);
         } catch (ex) {
           if (ex.code === "exists") {
             const ok = await confirmDialog({ title: `Replace “${name}”?`,
@@ -147,7 +158,7 @@ export default {
               confirmLabel: "Re-register", danger: true });
             if (ok) {
               try {
-                reg = await api.registerBegin(name, true, pose);
+                reg = await api.registerBegin(name, true, pose, level);
               } catch (ex2) {
                 if (ex2.code === "owner_signin_required") {
                   // only the owner may replace a profile: offer the sign-in
@@ -168,6 +179,7 @@ export default {
       } },
       h("div", { class: "field" }, h("label", { for: "reg-user" }, "Username"), input,
         h("div", { class: "help" }, "Stored in lower case; spaces become underscores.")),
+      h("div", { class: "field" }, h("label", null, "Check level"), levelBox),
       h("div", { class: "field" }, h("label", null, "Pose normalisation"), choiceBox),
       err, h("div", { class: "row" }, submit));
 
@@ -178,9 +190,9 @@ export default {
               h("div", { class: "sub" }, "About two minutes. You will need good light and one free hand."))), form),
           h("div", { class: "card stack" },
             h("h2", null, "What gets enrolled"),
-            notice("info", "face", h("strong", null, "Face anchor. "), "Five frames of your face, averaged into one SFace embedding. Optional, but once enrolled it is checked at every sign-in."),
+            notice("info", "face", h("strong", null, "Face anchor. "), "Five frames of your face, about 0.35 s apart (move your head a little), combined into one SFace embedding; refused unless all five show the same person. Optional, but once enrolled it is checked at every sign-in."),
             notice("info", "wave", h("strong", null, "Gesture password. "), "Five 3-second recordings of the same gesture. A finger sequence such as 1-2-4-3 makes the order gate effective."),
-            notice("info", "bones", h("strong", null, "Hand biometrics. "), "Bone-length ratios and movement rhythm are calibrated from the same recordings."))));
+            notice("info", "bones", h("strong", null, "Hand biometrics. "), "Bone-length ratios and movement rhythm are calibrated from the same recordings (the rhythm is not used for decisions on a Relaxed profile)."))));
       setTimeout(() => input.focus(), 50);
     };
 
@@ -274,7 +286,8 @@ export default {
             h("dt", null, "Largest variation"), h("dd", null, fmtNum(s.max_variation, 3)),
             h("dt", null, "Uniqueness vs. common gestures"), h("dd", null,
               s.uniqueness_ratio === null ? "—" : `${fmtNum(s.uniqueness_ratio, 2)}× ${s.unique ? "✓" : "(low)"}`),
-            h("dt", null, "Pose method"), h("dd", null, poseLabel(s.pose_method))),
+            h("dt", null, "Pose method"), h("dd", null, poseLabel(s.pose_method)),
+            h("dt", null, "Check level"), h("dd", null, s.check_level === "relaxed" ? "Relaxed (no movement-rhythm check)" : "Standard (all checks)")),
           h("div", { class: "row" },
             h("a", { class: "btn primary", href: `#/signin?user=${encodeURIComponent(s.username)}`, "aria-keyshortcuts": "S" },
               icon("signin"), "Sign in now", kbdHint("S")),

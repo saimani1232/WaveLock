@@ -59,7 +59,7 @@ def _routes(service):
         ("POST", "/api/auth/end"): lambda b, q: s.auth_end(),
         ("POST", "/api/register/begin"): lambda b, q: s.register_begin(
             b.get("username", ""), bool(b.get("overwrite", False)),
-            b.get("pose_method", "legacy")),
+            b.get("pose_method", "legacy"), b.get("check_level", "standard")),
         ("POST", "/api/register/face/capture"): lambda b, q: s.register_face_capture(),
         ("POST", "/api/register/face/skip"): lambda b, q: s.register_face_skip(),
         ("POST", "/api/register/record"): lambda b, q: s.register_record(),

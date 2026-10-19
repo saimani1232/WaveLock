@@ -37,16 +37,34 @@ export default {
           `A sample that fails the consistency check ${sys.max_retries_per_sample || 3} times is never accepted; ` +
           `the whole set is recorded again (up to ${sys.max_registration_restarts || 2} restarts).`),
         protection("monitor", "Local-only server",
-          "Listens on 127.0.0.1 only, rejects foreign hosts and cross-site requests, and serves a strict content security policy.")),
+          "Listens on 127.0.0.1 only, rejects foreign hosts and cross-site requests, and serves a strict content security policy."),
+        sys.liveness === false
+          ? protection("liveness", "Liveness check is OFF", "The server was started with --no-liveness: sign-in records the gesture without the challenge. Use this for demonstrations only.", true)
+          : protection("liveness", "Liveness check",
+            "Before each sign-in: show the requested number of fingers (all five count) and, with a face enrolled, turn your head as asked. The face seen must be the enrolled one. Then you start the gesture yourself, within 20 s."),
+        protection("signin", "Owner-only profile changes",
+          "Re-registering a username or enrolling / replacing its face needs a granted sign-in of that user in the last 10 minutes."),
+        protection("lock", "Profiles encrypted at rest",
+          "New templates, recordings and face embeddings are encrypted with Windows DPAPI, readable only by this Windows account on this computer."),
+        protection("refresh", "Guarded template aging",
+          "A template is replaced only after a very confident sign-in, and only if the gesture still matches the original enrolment (drift anchor); every update is logged."),
+        protection("users", "No public user list",
+          "The sign-in screens never list usernames (only developer mode shows them).")),
 
       h("div", { class: "card stack" },
         h("h2", null, "Known limitations"),
-        notice("warn", "alert", h("strong", null, "No liveness detection yet. "),
-          "A printed photo or a replayed video is not detected as fake; the hand biometrics are the only barrier. Planned for semester 2."),
-        notice("warn", "alert", h("strong", null, "Profile changes need confirmation only. "),
-          "Re-registering a username or replacing a face does not require the owner to sign in first (same as the desktop tools)."),
+        notice("warn", "alert", h("strong", null, "The liveness check is a countermeasure, not a proof. "),
+          "It stops a printed photo or a replayed video that cannot follow a random instruction. A live helper next to the owner, or a real-time deepfake that follows the instructions, is not stopped by it. It was tested with simulated cameras only, not with real attack material."),
+        notice("warn", "alert", h("strong", null, "New usernames are open. "),
+          "Anyone at this computer can register a new username; only changes to an existing profile need the owner's sign-in."),
+        notice("warn", "alert", h("strong", null, "Relaxed profiles skip the movement-rhythm check. "),
+          "They are rejected less often when the speed varies, but are weaker against someone who copies the gesture hesitantly. Face, liveness, gesture and hand anatomy still apply. The Users page shows each profile's check level."),
+        notice("warn", "alert", h("strong", null, "Encryption covers this Windows account only. "),
+          "Programs running as the same Windows user can read the profiles; config.json (thresholds) stays plain, and profiles created before encryption stay plain until converted with migrate_profiles.py --encrypt."),
+        notice("info", "info", h("strong", null, "Start the gesture as during registration. "),
+          "Still frames at the start and end of a recording are ignored (new and recalibrated profiles), but a gesture begun before the recording starts loses its beginning and is usually rejected."),
         notice("info", "flask", h("strong", null, "Evaluation status. "),
-          "Attack results are SIMULATED (synthetic attackers, perfect replay). Real enrolment recordings give genuine acceptance and zero-effort rejection only (evaluate_real_recordings.py); imitation, photo and replay attacks by real people have not been recorded.")));
+          "Attack results are SIMULATED (synthetic attackers, perfect replay). Real enrolment recordings give genuine acceptance and zero-effort rejection only, from one recording session per person and a few people (evaluate_real_recordings.py); imitation, photo and replay attacks by real people have not been recorded.")));
 
     // ------------------------------------------------------------ activity log
     const filter = h("select", { class: "select", "aria-label": "Filter by user" }, h("option", { value: "" }, "All users"));

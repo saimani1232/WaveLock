@@ -428,6 +428,7 @@ def evaluate_attempt(recorded_frames, clean_frames, frame_aspect, profile):
         trajectory_threshold=profile["trajectory_threshold"],
         live_kinematic_sequence=prepare_kinematic_sequence(
             matched, TARGET_FRAMES, frame_aspect=pose_aspect),
+        use_kinematics=profile.get("check_level", "standard") != "relaxed",
     )
 
     result.update({

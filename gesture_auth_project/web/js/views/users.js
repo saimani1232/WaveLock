@@ -6,7 +6,7 @@ function faceDialog(app, user, onDone) {
   const cam = new CameraPanel({ showFace: true, label: "Live camera for face enrolment" });
   const dots = h("div", { class: "face-dots" });
   const status = h("p", { class: "small muted", "aria-live": "polite" },
-    "Look straight at the camera in even light, then start the capture.");
+    "Look at the camera in even light, then start the capture; move your head a little while the five frames are taken.");
   const startBtn = h("button", { class: "btn primary", type: "button", disabled: true }, icon("face"), "Capture face");
   let unsub = null, releasePoll = null, running = false, finished = false;
 
@@ -101,6 +101,7 @@ function userCard(u, app, refresh) {
       u.face_enrolled ? pill("Face anchor", "accent", "face") : pill("No face anchor", "warn", "face"),
       pill(`${u.samples} samples`, "", "wave"),
       pill(`${poseLabel(u.pose_method)} pose`, ""),
+      u.check_level === "relaxed" ? pill("Relaxed checks: no movement rhythm", "warn") : pill("All checks", ""),
       u.path_gate ? pill("Wrist-path gate", "info") : pill("No path gate (legacy)", ""),
       u.locked_for > 0 ? pill(`Locked ${fmtSeconds(u.locked_for)}`, "danger", "lock") : null),
     t ? h("div", { class: "thresholds" },

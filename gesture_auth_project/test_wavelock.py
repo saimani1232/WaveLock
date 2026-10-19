@@ -490,6 +490,53 @@ def test_temporal_trim():
         assert ga.evaluate_attempt(list(early), [], ASPECT, reloaded)["granted"]
 
 
+def test_check_level():
+    import gesture_auth as ga
+    import migrate_profiles as mp_
+    with TempDir() as tmp:
+        raws = genuine_set()
+        std = register(tmp, "std", raws=raws)
+        poses = [normalize_gesture(r) for r in raws]
+        gc.save_registration("rel", poses, templates_dir=tmp, raw_samples=raws,
+                             frame_aspect=ASPECT, check_level=gc.CHECK_LEVEL_RELAXED)
+        rel = gc.load_user_profile("rel", templates_dir=tmp)
+        assert std["check_level"] == "standard" and "check_level" not in gc._read_config("std", tmp)
+        assert rel["check_level"] == "relaxed" and gc._read_config("rel", tmp)["check_level"] == "relaxed"
+        g = genuine_set(1, seed=31)[0]
+        # a genuine gesture with a long pause halfway: only the kinematic check objects
+        k = len(g) // 2
+        paused = np.concatenate([g[:k], np.repeat(g[k:k + 1], 30, axis=0), g[k:]])
+        a = ga.evaluate_attempt(list(paused), [], ASPECT, std)
+        b = ga.evaluate_attempt(list(paused), [], ASPECT, rel)
+        assert not a["granted"] and a["reason"] == "impostor_kinematic_dynamics", a["reason"]
+        assert b["granted"] and b["details"]["kinematics_used"] is False
+        assert a["details"]["kinematics_used"] is True
+        # every other check still applies to a relaxed profile
+        wrong = synth_raw(order=("ring", "pinky", "index", "middle"), seed=7)
+        assert not ga.evaluate_attempt(list(wrong), [], ASPECT, rel)["granted"]
+        # aging and recalibration keep the level
+        res = ga.evaluate_attempt(list(g), [], ASPECT, rel)
+        gc.update_templates_if_high_confidence("rel", res["pose"], 0.0, rel["threshold"], rel["templates"],
+                                               templates_dir=tmp, live_raw=res["raw"])
+        assert gc._read_config("rel", tmp)["check_level"] == "relaxed"
+        assert mp_.retrim_user("rel", tmp)["status"] == "retrimmed"
+        assert gc.load_user_profile("rel", templates_dir=tmp)["check_level"] == "relaxed"
+        # migrate_profiles --check-level changes only the level
+        thr = gc._read_config("std", tmp)["threshold"]
+        assert mp_.set_check_level("std", "relaxed", tmp) == ("standard", "relaxed")
+        c = gc._read_config("std", tmp)
+        assert c["check_level"] == "relaxed" and c["threshold"] == thr
+        # an unknown level is refused (fail closed)
+        c["check_level"] = "none"
+        gc._atomic_write_json(os.path.join(tmp, "std", "config.json"), c)
+        try:
+            gc.load_user_profile("std", templates_dir=tmp)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unknown check_level accepted")
+
+
 def test_signin_never_writes_config():
     with TempDir() as tmp:
         register(tmp)

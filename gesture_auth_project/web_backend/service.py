@@ -31,6 +31,8 @@ from gesture_compare import (
     NUM_REGISTRATION_SAMPLES,
     NEW_PROFILE_TEMPORAL_TRIM,
     matching_recording,
+    CHECK_LEVELS,
+    CHECK_LEVEL_STANDARD,
     list_registered_users,
     normalize_username,
     load_user_profile,
@@ -242,6 +244,7 @@ class WaveLockService:
                 "face_enrolled": bool(config.get("face_enrolled"))
                 or os.path.exists(os.path.join(user_dir, "face_embedding.npy")),
                 "pose_method": config.get("pose_method", POSE_METHOD_LEGACY),
+                "check_level": config.get("check_level", CHECK_LEVEL_STANDARD),
                 "raw_recordings": os.path.exists(os.path.join(user_dir, "gesture_1_raw.npy")),
                 "path_gate": config.get("trajectory_threshold") is not None,
                 "last_attempt": self._last_attempt(name),
@@ -571,6 +574,7 @@ class WaveLockService:
                      "kin_match": d["kinematic_match"],
                      "kin_confidence": d["kinematic_confidence"],
                      "kin_details": d["kinematic_details"],
+                     "kin_used": d["kinematics_used"],
                      "soft_consensus_used": d["soft_consensus_used"],
                      "passed": d["passes_biometric"]},
             "multimodal_fused_score": d["multimodal_fused_score"],
@@ -620,7 +624,8 @@ class WaveLockService:
         return state
 
     # ------------------------------------------------------------ registration
-    def register_begin(self, raw_username, overwrite=False, pose_method="legacy"):
+    def register_begin(self, raw_username, overwrite=False, pose_method="legacy",
+                       check_level=CHECK_LEVEL_STANDARD):
         name = self._username(raw_username, must_exist=False)
         exists = name in list_registered_users(self.templates_dir)
         if exists and not overwrite:
@@ -632,6 +637,8 @@ class WaveLockService:
             raise ApiError(403, al.OWNER_REQUIRED_MESSAGE.format(user=name), "owner_signin_required")
         if pose_method not in ("legacy", "aspect"):
             raise ApiError(400, "pose_method must be 'legacy' or 'aspect'.")
+        if check_level not in CHECK_LEVELS:
+            raise ApiError(400, "check_level must be 'standard' or 'relaxed'.")
         if self.reg is not None and self.reg["status"] == "active":
             # e.g. a second browser tab: never orphan the running worker
             raise ApiError(409, f"A registration for '{self.reg['username']}' is already in progress. "
@@ -641,6 +648,7 @@ class WaveLockService:
             self.reg = {
                 "username": name, "replacing": exists,
                 "pose_method": POSE_METHOD_ASPECT if pose_method == "aspect" else POSE_METHOD_LEGACY,
+                "check_level": check_level,
                 "step": "face", "status": "active",
                 "face_status": "pending", "face_embedding": None, "face_progress": 0,
                 "current_sample": 1, "accepted": 0, "awaiting_record": False,
@@ -807,7 +815,7 @@ class WaveLockService:
             name, samples, threshold, pairwise, templates_dir=self.templates_dir,
             raw_samples=raw_samples, frame_aspect=frame_aspect,
             face_embedding=r["face_embedding"], pose_method=r["pose_method"],
-            temporal_trim=NEW_PROFILE_TEMPORAL_TRIM)
+            temporal_trim=NEW_PROFILE_TEMPORAL_TRIM, check_level=r["check_level"])
         if r["replacing"]:
             al.consume_verification(name, self.templates_dir)
         config = _read_config(name, self.templates_dir)
@@ -828,6 +836,7 @@ class WaveLockService:
             "samples": len(samples),
             "face": face,
             "pose_method": r["pose_method"],
+            "check_level": r["check_level"],
             "pairwise_distances": [round(d, 4) for d in pairwise],
             "max_variation": max(pairwise),
             "consistency": details["consistency_score"],

@@ -44,8 +44,8 @@ export const api = {
   authRecord: () => call("POST", "/api/auth/record"),
   authReset: () => call("POST", "/api/auth/reset"),
   authEnd: () => call("POST", "/api/auth/end"),
-  registerBegin: (username, overwrite, poseMethod) =>
-    call("POST", "/api/register/begin", { username, overwrite, pose_method: poseMethod }),
+  registerBegin: (username, overwrite, poseMethod, checkLevel = "standard") =>
+    call("POST", "/api/register/begin", { username, overwrite, pose_method: poseMethod, check_level: checkLevel }),
   registerFaceCapture: () => call("POST", "/api/register/face/capture"),
   registerFaceSkip: () => call("POST", "/api/register/face/skip"),
   registerRecord: () => call("POST", "/api/register/record"),

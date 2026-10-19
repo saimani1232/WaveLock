@@ -19,6 +19,11 @@ Temporal trim (semester 2, see gesture_compare.TEMPORAL_TRIM_METHOD):
 recalibrates a profile from its raw recordings so still frames at the start
 and end are ignored (same pose method; old profile backed up first).
 
+Check level (see gesture_compare.CHECK_LEVELS):
+    python migrate_profiles.py --check-level relaxed --user NAME
+"relaxed": the movement-rhythm (kinematic) check does not decide; only
+config.json changes (no recalibration needed).
+
 Encryption at rest (utils/secure_store.py, Windows DPAPI):
     python migrate_profiles.py --encrypt [--user NAME]   encrypt existing .npy files in place
     python migrate_profiles.py --decrypt [--user NAME]   back to plain files (e.g. before moving
@@ -46,6 +51,8 @@ from gesture_compare import (
     _read_config,
     matching_recording,
     TEMPORAL_TRIM_METHOD,
+    CHECK_LEVELS,
+    _atomic_write_json,
 )
 from gesture_capture import TARGET_FRAMES
 from utils.normalize import normalize_gesture, aspect_for_method, POSE_METHOD_ASPECT, POSE_METHOD_LEGACY
@@ -79,7 +86,8 @@ def migrate_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
     trim = config.get("temporal_trim")
     poses = [normalize_gesture(matching_recording(r, trim), TARGET_FRAMES, frame_aspect=aspect)
              for r in raws]
-    new_config = build_profile_config(poses, raws, aspect, POSE_METHOD_ASPECT, trim)
+    new_config = build_profile_config(poses, raws, aspect, POSE_METHOD_ASPECT, trim,
+                                      config.get("check_level"))
 
     old_anthro = (config.get("anthropometric_profile") or {}).get("tolerance")
     report = {
@@ -100,7 +108,8 @@ def migrate_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
     # face_embedding=None keeps the enrolled face (see save_registration).
     save_registration(username, poses, templates_dir=templates_dir,
                       raw_samples=raws, frame_aspect=aspect,
-                      pose_method=POSE_METHOD_ASPECT, temporal_trim=trim)
+                      pose_method=POSE_METHOD_ASPECT, temporal_trim=trim,
+                      check_level=config.get("check_level"))
     report["status"] = "migrated"
     report["backup"] = backup
     return report
@@ -129,7 +138,8 @@ def retrim_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
     pose_aspect = aspect_for_method(pose_method, aspect)
     poses = [normalize_gesture(matching_recording(r, TEMPORAL_TRIM_METHOD), TARGET_FRAMES,
                                frame_aspect=pose_aspect) for r in raws]
-    new_config = build_profile_config(poses, raws, aspect, pose_method, TEMPORAL_TRIM_METHOD)
+    new_config = build_profile_config(poses, raws, aspect, pose_method, TEMPORAL_TRIM_METHOD,
+                                      config.get("check_level"))
     report = {
         "user": username,
         "old": {k: config.get(k) for k in SHOWN_KEYS},
@@ -146,10 +156,24 @@ def retrim_user(username, templates_dir=TEMPLATES_DIR, dry_run=False):
     shutil.copytree(os.path.join(templates_dir, username), backup)
     save_registration(username, poses, templates_dir=templates_dir,
                       raw_samples=raws, frame_aspect=aspect,
-                      pose_method=pose_method, temporal_trim=TEMPORAL_TRIM_METHOD)
+                      pose_method=pose_method, temporal_trim=TEMPORAL_TRIM_METHOD,
+                      check_level=config.get("check_level"))
     report["status"] = "retrimmed"
     report["backup"] = backup
     return report
+
+
+def set_check_level(username, level, templates_dir=TEMPLATES_DIR, dry_run=False):
+    """Set config["check_level"] (thresholds are unaffected). Returns (old, new)."""
+    if level not in CHECK_LEVELS:
+        raise ValueError(f"check level must be one of {CHECK_LEVELS}")
+    username = normalize_username(username)
+    config = _read_config(username, templates_dir)
+    old = config.get("check_level", "standard")
+    if not dry_run and old != level:
+        config["check_level"] = level
+        _atomic_write_json(os.path.join(templates_dir, username, "config.json"), config)
+    return old, level
 
 
 def profile_arrays(username, templates_dir=TEMPLATES_DIR):
@@ -190,6 +214,8 @@ def main(argv=None):
     mode.add_argument("--decrypt", action="store_true", help="Store the arrays as plain .npy again")
     mode.add_argument("--trim", action="store_true",
                       help="Recalibrate with the temporal trim (still frames at start/end ignored)")
+    mode.add_argument("--check-level", choices=CHECK_LEVELS, default=None,
+                      help="Set the check level (relaxed: the kinematic check does not decide)")
     args = parser.parse_args(argv)
 
     users = list_registered_users(args.templates_dir)
@@ -202,6 +228,18 @@ def main(argv=None):
     if not users:
         print(f"No registered users in {args.templates_dir}.")
         return 1
+
+    if args.check_level:
+        if not args.user:
+            print("ERROR: --check-level needs --user NAME.")
+            return 1
+        try:
+            old, new = set_check_level(users[0], args.check_level, args.templates_dir, args.dry_run)
+        except (OSError, ValueError) as e:
+            print(f"ERROR: {e}")
+            return 1
+        print(f"  {users[0]}: check level {old} -> {new}" + (" (dry run)" if args.dry_run else ""))
+        return 0
 
     if args.encrypt or args.decrypt:
         failed = 0

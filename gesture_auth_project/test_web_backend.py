@@ -254,10 +254,13 @@ class App:
 
 # ------------------------------------------------------------------ flows
 
-def register_via_api(app, username="alice", face=False, pose_method="legacy", overwrite=False):
+def register_via_api(app, username="alice", face=False, pose_method="legacy", overwrite=False,
+                     check_level=None):
     app.ok("POST", "/api/camera/start", {})
-    app.ok("POST", "/api/register/begin", {"username": username, "overwrite": overwrite,
-                                           "pose_method": pose_method})
+    body = {"username": username, "overwrite": overwrite, "pose_method": pose_method}
+    if check_level is not None:
+        body["check_level"] = check_level
+    app.ok("POST", "/api/register/begin", body)
     if face:
         app.ok("POST", "/api/register/face/capture")
         app.wait(lambda s: s["register"]["face_status"] in ("captured", "failed"), what="face")
@@ -336,6 +339,7 @@ def test_register_then_sign_in_normal_mode():
         try:
             summary = register_via_api(app)
             assert summary["samples"] == 5 and summary["face"] == "skipped"
+            assert summary["check_level"] == "standard"
             assert summary["thresholds"]["dtw"] >= 2.0
             users = app.ok("GET", "/api/users")
             assert [u["name"] for u in users] == ["alice"] and "thresholds" not in users[0]
@@ -608,6 +612,25 @@ def test_slow_face_models_do_not_starve_the_recording():
         finally:
             app.close()
             gesture_auth.verify_face_over_frames = real_check
+
+
+def test_check_level_api():
+    with tw.TempDir() as tmp:
+        app = make_app(tmp, liveness=False)
+        try:
+            status, payload, _ = app.request("POST", "/api/register/begin",
+                                             {"username": "bob", "check_level": "none"})
+            assert status == 400, payload
+            summary = register_via_api(app, "bob", check_level="relaxed")
+            assert summary["check_level"] == "relaxed"
+            assert tw.gc._read_config("bob", tmp)["check_level"] == "relaxed"
+            register_via_api(app, "carl")
+            levels = {u["name"]: u["check_level"] for u in app.ok("GET", "/api/users")}
+            assert levels == {"bob": "relaxed", "carl": "standard"}, levels
+            status, res = sign_in(app, "bob", tw.genuine_set(1, seed=31)[0])
+            assert status == 200 and res["granted"], res
+        finally:
+            app.close()
 
 
 def test_liveness_challenge_flow():
