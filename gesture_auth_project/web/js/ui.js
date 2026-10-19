@@ -28,6 +28,8 @@ const ICON_PATHS = {
   record: '<circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>',
   refresh: '<path d="M20.5 12A8.5 8.5 0 1 1 18 6"/><path d="M20.5 3.5V8H16"/>',
   arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  liveness: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M2.5 9.5a9.5 9.5 0 0 1 2-4.5M21.5 9.5a9.5 9.5 0 0 0-2-4.5"/>',
   logout: '<path d="M14.5 4H18a2.5 2.5 0 0 1 2.5 2.5v11A2.5 2.5 0 0 1 18 20h-3.5"/><path d="M10 16.5 5.5 12 10 7.5M5.5 12H16"/>',
   activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
   code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',

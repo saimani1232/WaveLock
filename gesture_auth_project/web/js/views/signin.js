@@ -4,6 +4,7 @@ import { handMark } from "../brand.js";
 import { h, icon, clear, toast, initials, notice, fmtSeconds, fmtNum, fill, add, useShortcuts, kbdHint } from "../ui.js";
 
 const STAGES = [
+  { key: "liveness", label: "Liveness", icon: "liveness" },
   { key: "face", label: "Face anchor", icon: "face" },
   { key: "gesture", label: "Gesture gates", icon: "wave" },
   { key: "hand", label: "Hand biometrics", icon: "bones" },
@@ -86,6 +87,14 @@ function countdownRing(left, total) {
   add(span, h("b", null, String(Math.ceil(left))));
   return span;
 }
+
+const LIVENESS_TEXT = {
+  liveness_timeout_fingers: "The requested number of fingers was not shown in time.",
+  liveness_timeout_head_turn: "No head turn was seen in time. A photo cannot turn its head.",
+  liveness_face_mismatch: "The face during the challenge does not match this profile.",
+  liveness_no_face: "No face was visible during the challenge.",
+  liveness_no_hand_for_gesture: "No hand was visible to start the gesture recording.",
+};
 
 export default {
   id: "signin",
@@ -202,7 +211,8 @@ export default {
         h("div", { class: "stack" }, cam.el,
           h("p", { class: "hint-line" }, icon("info"),
             h("span", null, "Press ", h("span", { class: "kbd" }, "R"), " or ", h("span", { class: "kbd" }, "Space"),
-              " to record, ", h("span", { class: "kbd" }, "T"), " to try again. Keep your hand and face in the frame. ",
+              state.liveness ? " to start (a short liveness check comes first), " : " to record, ",
+              h("span", { class: "kbd" }, "T"), " to try again. Keep your hand and face in the frame. ",
               h("span", { class: "kbd" }, "?"), " shows all shortcuts."))),
         h("div", { class: "stack" },
           h("div", { class: "card" },
@@ -227,7 +237,16 @@ export default {
       const r = s.result;
       const d = r && r.details && r.details.gates ? r.details : null;
       const stateOf = (key) => {
+        if (key === "liveness") {
+          if (!s.liveness) return "off";
+          if (s.phase === "challenge") return "active";
+          if (s.phase === "result" && r && !r.too_few_frames) return r.liveness_failed ? "fail" : "pass";
+          if (s.phase === "recording" || s.phase === "processing") return "pass";
+          return "";
+        }
         if (key === "face" && !s.face_enrolled) return "off";
+        if (s.phase === "challenge") return "";
+        if (s.phase === "result" && r && r.liveness_failed) return key === "decision" ? "fail" : "";
         if (s.phase === "recording") return key === "face" || key === "gesture" ? "active" : "";
         if (s.phase === "processing") return "active";
         if (s.phase === "result" && r) {
@@ -242,10 +261,12 @@ export default {
         }
         return "";
       };
+      pipeline.classList.toggle("five", true);
       fill(pipeline, STAGES.map((st, i) => {
         const cls = stateOf(st.key);
         const iconName = cls === "pass" ? "check" : cls === "fail" ? "x" : st.icon;
-        const note = { pass: "Passed", fail: "Failed", checked: "Checked", off: "Not enrolled", active: "Checking" }[cls] || "";
+        const note = { pass: "Passed", fail: "Failed", checked: "Checked", active: "Checking",
+          off: st.key === "liveness" ? "Off" : "Not enrolled" }[cls] || "";
         return h("div", { class: `stage ${cls}`, vars: { "--i": String(i) } },
           h("span", { class: "stage-icon" }, icon(iconName)), st.label,
           note ? h("span", { class: "stage-note" }, note) : null);
@@ -281,6 +302,15 @@ export default {
         }, icon("record"), cam && cam.live ? "Start recording" : "Waiting for the camera…",
           cam && cam.live && !(s.locked_for > 0) ? kbdHint("R") : null));
         cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked: wait for the timer" : "Ready: press R to record" });
+      } else if (s.phase === "challenge" && s.challenge) {
+        const ch = s.challenge, st = ch.steps[Math.min(ch.index, ch.steps.length - 1)];
+        add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("liveness")),
+          h("div", null, h("h3", null, "Liveness check"),
+            h("p", { class: "small muted" }, st.kind === "fingers"
+              ? `Show ${st.count} finger${st.count === 1 ? "" : "s"} (index to pinky, no thumb) and hold still.`
+              : `Turn your head ${st.direction === "left" ? "to the left" : "to the right"} a little, then look back.`,
+              " The gesture recording starts right after."))));
+        cam && cam.setMode("challenge", { step: st, index: ch.index, total: ch.steps.length, remaining: ch.remaining });
       } else if (s.phase === "recording") {
         add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("wave")),
           h("div", null, h("h3", null, "Perform your gesture now"),
@@ -292,7 +322,13 @@ export default {
             h("p", { class: "small muted" }, "Checking face, gesture gates and hand biometrics…"))));
         cam && cam.setMode("processing", { text: "Verifying identity…" });
       } else if (s.phase === "result" && r) {
-        if (r.too_few_frames) {
+        if (r.liveness_failed) {
+          add(action, h("div", { class: "decision danger shake" }, h("span", { class: "d-icon" }, icon("liveness")),
+            h("div", null, h("h3", null, "Liveness check failed"),
+              h("p", { class: "small muted" }, (LIVENESS_TEXT[r.liveness_reason] || "The challenge was not completed.") + " " +
+                (r.locked_for > 0 ? `Locked for ${fmtSeconds(r.locked_for)}.`
+                  : `${r.attempts_left} attempt${r.attempts_left === 1 ? "" : "s"} left before a temporary lock.`)))));
+        } else if (r.too_few_frames) {
           add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("hand")),
             h("div", null, h("h3", null, "Hand not seen long enough"),
               h("p", { class: "small muted" }, `Only ${r.hand_frames} hand frames were captured. This attempt was not counted.`))));
@@ -310,6 +346,8 @@ export default {
                   `The checks did not agree. ${r.attempts_left} attempt${r.attempts_left === 1 ? "" : "s"} left before a temporary lock.`))));
         }
         if (r.too_few_frames) cam && cam.setMode("idle", { hint: "Keep your hand in view, then try again" });
+        else if (r.liveness_failed) cam && cam.setMode("denied", { title: "Liveness check failed",
+          sub: r.locked_for > 0 ? "Temporarily locked" : `${r.attempts_left} attempt${r.attempts_left === 1 ? "" : "s"} left` });
         else if (r.granted) cam && cam.setMode("granted", { title: "Access granted", sub: `Welcome, ${s.username}` });
         else cam && cam.setMode("denied", { title: "Access denied",
           sub: r.locked_for > 0 ? "Temporarily locked" : `${r.attempts_left} attempt${r.attempts_left === 1 ? "" : "s"} left` });
@@ -335,7 +373,9 @@ export default {
       if (!s) { if (seenOnServer) showLanding(); return; }
       if (s.username !== session.username) return;
       seenOnServer = true;
-      const key = `${s.phase}|${s.attempt}|${s.error}|${Math.ceil(s.locked_for)}|${cam && cam.live}`;
+      const ch = s.challenge;
+      const key = `${s.phase}|${s.attempt}|${s.error}|${Math.ceil(s.locked_for)}|${cam && cam.live}` +
+        (ch ? `|${ch.index}|${Math.ceil(ch.remaining)}` : "");
       if (key !== lastKey) { lastKey = key; render(s); }
       if (s.phase === "recording" && s.recording && cam) cam.setProgress(s.recording);
     });

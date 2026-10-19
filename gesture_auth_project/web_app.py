@@ -2,7 +2,7 @@
 WaveLock Web UI — local browser front end for registration and sign-in.
 
 Usage:
-    python web_app.py [--port 8765] [--camera N] [--debug] [--no-browser]
+    python web_app.py [--port 8765] [--camera N] [--debug] [--no-browser] [--no-liveness]
 
 Opens http://127.0.0.1:8765 in the default browser. The server only listens
 on this computer. --debug (developer mode) shows per-gate scores, cosine
@@ -32,6 +32,9 @@ def main(argv=None):
     parser.add_argument("--debug", action="store_true",
                         help="Developer mode: show scores and reasons (not for real sign-ins)")
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser window")
+    parser.add_argument("--no-liveness", action="store_true",
+                        help="Skip the liveness challenge before sign-in (photo / video replay "
+                             "are then only stopped by the hand checks)")
     parser.add_argument("--verbose", action="store_true", help="Log every HTTP request")
     args = parser.parse_args(argv)
 
@@ -44,7 +47,8 @@ def main(argv=None):
             pass
 
     camera = CameraService()
-    service = WaveLockService(camera, debug=args.debug, default_camera=args.camera)
+    service = WaveLockService(camera, debug=args.debug, default_camera=args.camera,
+                              liveness=not args.no_liveness)
     try:
         server = WaveLockServer(service, "127.0.0.1", args.port, verbose=args.verbose)
     except OSError as e:
@@ -58,6 +62,7 @@ def main(argv=None):
     print("=" * 60)
     print(f"  Open: {url}")
     print(f"  Mode: {'DEVELOPER (scores visible)' if args.debug else 'normal (scores hidden)'}")
+    print(f"  Liveness challenge: {'OFF (--no-liveness)' if args.no_liveness else 'on'}")
     print("  Stop: Ctrl+C")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

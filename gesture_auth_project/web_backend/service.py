@@ -70,6 +70,9 @@ from utils.face_auth import (
 )
 from utils import attempt_limit as al
 from web_backend.camera import CameraError, FACE_LOCK
+from utils import liveness as lv
+
+HAND_WAIT_AFTER_CHALLENGE_SEC = 3.0   # time to raise the hand for the gesture
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACE_REQUIRED_FRAMES = 5          # same burst as gesture_capture / enroll_face
@@ -126,12 +129,14 @@ def _console_never_fails():
 
 
 class WaveLockService:
-    def __init__(self, camera, templates_dir=TEMPLATES_DIR, debug=False, default_camera=None):
+    def __init__(self, camera, templates_dir=TEMPLATES_DIR, debug=False, default_camera=None,
+                 liveness=True):
         _console_never_fails()
         self.camera = camera
         self.templates_dir = templates_dir
         self.debug = bool(debug)
         self.default_camera = default_camera      # --camera N; None = auto-detect
+        self.liveness = bool(liveness)            # challenge before every sign-in (--no-liveness)
         self._lock = threading.RLock()
         self.activity = None          # None | "auth" | "register" | "face"
         self.auth = None
@@ -197,6 +202,7 @@ class WaveLockService:
             "camera": self.camera.status(),
             "activity": self.activity,
             "recording_sec": RECORDING_DURATION_SEC,
+            "liveness": self.liveness,
             "samples_required": NUM_REGISTRATION_SAMPLES,
             "min_hand_frames": MIN_RECORDED_FRAMES,
             "max_retries_per_sample": MAX_RETRIES_PER_SAMPLE,
@@ -360,11 +366,13 @@ class WaveLockService:
         a = self.auth
         if a is None or self.activity != "auth":
             raise ApiError(409, "Enter a username to start signing in.", "no_session")
-        if a["phase"] in ("recording", "processing"):
+        if a["phase"] in ("challenge", "recording", "processing"):
             raise ApiError(409, "An attempt is already running.", "busy")
         left = al.seconds_locked(a["username"], self.templates_dir)
         if left > 0:
             raise ApiError(423, f"Too many failed attempts. Try again in {left:.0f} s.", "locked")
+        if self.liveness:
+            return self._auth_challenge(a)
         rec = self._start_recording(keep_clean_frames=True)
         with self._lock:
             a["phase"] = "recording"
@@ -374,6 +382,74 @@ class WaveLockService:
             a["rec"] = rec
         threading.Thread(target=self._auth_worker, args=(a, rec), daemon=True).start()
         return self._auth_state()
+
+    # ------------------------------------------------------------ liveness
+    def _auth_challenge(self, a):
+        challenge = lv.new_challenge(a["profile"]["face_embedding"] is not None)
+        try:
+            job = self.camera.start_challenge(challenge)
+        except CameraError as e:
+            raise ApiError(503, str(e), "camera")
+        except RuntimeError as e:
+            raise ApiError(409, str(e), "busy")
+        with self._lock:
+            a["phase"] = "challenge"
+            a["result"] = None
+            a["error"] = None
+            a["attempt"] += 1
+            a["job"] = job
+        threading.Thread(target=self._challenge_worker, args=(a, job), daemon=True).start()
+        return self._auth_state()
+
+    def _challenge_worker(self, a, job):
+        job.done.wait()
+        ch = job.challenge
+        if job.error and ch.reason == "liveness_cancelled":
+            with self._lock:                         # sign-in screen left: nothing to count
+                a["phase"] = "ready"
+            return
+        if ch.state == "passed" and a["profile"]["face_embedding"] is not None:
+            # Bind the challenge to the enrolled face: the person who turned
+            # their head must be the account owner, not a helper.
+            if job.face_frame is None:
+                ch.state, ch.reason = "failed", "liveness_no_face"
+            else:
+                with FACE_LOCK:
+                    match, _, _, _, reason = self.camera.face_ops.verify(
+                        job.face_frame, a["profile"]["face_embedding"])
+                if not match:
+                    ch.state, ch.reason = "failed", "liveness_face_mismatch"
+        if ch.state != "passed":
+            self._liveness_failed(a, ch.reason or "liveness_failed")
+            return
+        # Passed: start the gesture recording straight away (a hand must be up).
+        end = time.time() + HAND_WAIT_AFTER_CHALLENGE_SEC
+        while not self.camera.hand_visible and time.time() < end and self.auth is a:
+            time.sleep(0.05)
+        if self.auth is not a:
+            return
+        try:
+            rec = self.camera.start_recording(RECORDING_DURATION_SEC, keep_clean_frames=True)
+        except (CameraError, RuntimeError):
+            self._liveness_failed(a, "liveness_no_hand_for_gesture")
+            return
+        with self._lock:
+            a["phase"] = "recording"
+            a["rec"] = rec
+        self._auth_worker(a, rec)
+
+    def _liveness_failed(self, a, reason):
+        state = al.record_attempt(a["username"], False, self.templates_dir, reason=reason)
+        payload = {"granted": False, "too_few_frames": False, "liveness_failed": True,
+                   "liveness_reason": reason, "hand_frames": 0,
+                   "attempts_left": state["attempts_left"],
+                   "locked_for": round(state["locked_for"], 1),
+                   "time": datetime.now().isoformat(timespec="seconds")}
+        if self.debug:
+            payload["details"] = {"failure_reason": reason}
+        with self._lock:
+            a["result"] = jsonable(payload)
+            a["phase"] = "result"
 
     def _auth_worker(self, a, rec):
         rec.done.wait()
@@ -488,7 +564,7 @@ class WaveLockService:
         return self._auth_state()
 
     def auth_end(self):
-        if self.auth is not None and self.auth["phase"] == "recording":
+        if self.auth is not None and self.auth["phase"] in ("challenge", "recording"):
             self.camera.cancel_jobs("cancelled")
         self.camera.set_identity_preview(None)
         with self._lock:
@@ -510,6 +586,8 @@ class WaveLockService:
             "error": a["error"],
             "locked_for": round(al.seconds_locked(a["username"], self.templates_dir), 1),
             "recording": self.camera.recording_progress() if a["phase"] == "recording" else None,
+            "challenge": self.camera.challenge_state() if a["phase"] == "challenge" else None,
+            "liveness": self.liveness,
         }
         if self.debug:
             state["pose_method"] = a["profile"].get("pose_method")

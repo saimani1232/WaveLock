@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from utils.landmarks import extract_landmarks
+from utils.liveness import count_extended_fingers, yaw_proxy
 
 FACE_DETECT_INTERVAL_SEC = 0.25      # same throttle as gesture_auth.py's preview
 IDENTITY_INTERVAL_SEC = 0.5          # developer identity preview (detect + SFace)
@@ -127,6 +128,16 @@ class Recording:
         return min(1.0, (now - self.started) / self.duration)
 
 
+class ChallengeJob:
+    """A liveness challenge being answered (utils.liveness.Challenge)."""
+
+    def __init__(self, challenge):
+        self.challenge = challenge
+        self.face_frame = None            # latest clean frame with a detected face
+        self.error = None
+        self.done = threading.Event()
+
+
 class FaceCapture:
     """Collects face embeddings from consecutive frames with a detected face."""
 
@@ -171,6 +182,7 @@ class CameraService:
         self._frame_id = 0
         self._recording = None
         self._face_capture = None
+        self._challenge = None
         self._identity = None             # (embedding, username) for debug preview
         # Latest clean frame for the face thread: the camera thread never waits
         # for the face models (they took 150-350 ms per frame on battery and
@@ -242,7 +254,7 @@ class CameraService:
         with self._lock:
             if self.state != "running":
                 raise CameraError("The camera is not running.")
-            if self._recording is not None or self._face_capture is not None:
+            if self._recording is not None or self._face_capture is not None or self._challenge is not None:
                 raise RuntimeError("A capture is already in progress.")
             if not self.hand_visible:
                 raise RuntimeError("No hand detected. Show your hand to the camera first.")
@@ -250,11 +262,21 @@ class CameraService:
             self._recording = rec
             return rec
 
+    def start_challenge(self, challenge):
+        with self._lock:
+            if self.state != "running":
+                raise CameraError("The camera is not running.")
+            if self._recording is not None or self._face_capture is not None or self._challenge is not None:
+                raise RuntimeError("A capture is already in progress.")
+            job = ChallengeJob(challenge)
+            self._challenge = job
+            return job
+
     def start_face_capture(self, required=5):
         with self._lock:
             if self.state != "running":
                 raise CameraError("The camera is not running.")
-            if self._recording is not None or self._face_capture is not None:
+            if self._recording is not None or self._face_capture is not None or self._challenge is not None:
                 raise RuntimeError("A capture is already in progress.")
             cap = FaceCapture(required)
             self._face_capture = cap
@@ -262,12 +284,15 @@ class CameraService:
 
     def cancel_jobs(self, reason="cancelled"):
         with self._lock:
-            for job in (self._recording, self._face_capture):
+            for job in (self._recording, self._face_capture, self._challenge):
                 if job is not None and not job.done.is_set():
                     job.error = reason
+                    if isinstance(job, ChallengeJob):
+                        job.challenge.fail("liveness_cancelled")
                     job.done.set()
             self._recording = None
             self._face_capture = None
+            self._challenge = None
 
     def recording_progress(self):
         rec = self._recording
@@ -358,6 +383,11 @@ class CameraService:
                     last_light = now
                 if rec is not None:
                     self._feed_recording(rec, now, landmarks, clean, w / h)
+                job = self._challenge
+                if job is not None:
+                    job.challenge.feed_hand(count_extended_fingers(landmarks), now)
+                    job.challenge.tick(now)
+                    self._finish_challenge_if_done(job)
 
                 self._draw_face_box(frame)
                 ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
@@ -420,7 +450,8 @@ class CameraService:
                 continue
             if self._recording is not None:           # gesture recording: hands only
                 continue
-            if fcap is None and now - last_face < FACE_DETECT_INTERVAL_SEC:
+            job = self._challenge
+            if fcap is None and job is None and now - last_face < FACE_DETECT_INTERVAL_SEC:
                 continue
             if not FACE_LOCK.acquire(blocking=False):  # a sign-in decision is using the models
                 time.sleep(0.05)
@@ -440,6 +471,12 @@ class CameraService:
                 fcap = self._face_capture
                 if fcap is not None:
                     self._feed_face_capture(fcap, frame, face_row, now)
+                job = self._challenge
+                if job is not None:
+                    if face_row is not None:
+                        job.face_frame = frame
+                    job.challenge.feed_face(yaw_proxy(face_row), now)
+                    self._finish_challenge_if_done(job)
             except Exception:
                 self.face_bbox = None             # never let a face error stop the camera
                 self.face_label = None
@@ -475,6 +512,18 @@ class CameraService:
         if now - fcap.started > FACE_CAPTURE_TIMEOUT_SEC:
             fcap.error = "No face was detected long enough. Face the camera in good light."
             self._finish_face_capture(fcap)
+
+    def _finish_challenge_if_done(self, job):
+        if job.challenge.state == "running":
+            return
+        with self._lock:
+            if self._challenge is job:
+                self._challenge = None
+        job.done.set()
+
+    def challenge_state(self):
+        job = self._challenge
+        return None if job is None else job.challenge.public()
 
     def _finish_face_capture(self, fcap):
         with self._lock:

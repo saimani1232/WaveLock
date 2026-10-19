@@ -211,7 +211,7 @@ export class CameraPanel {
     } else {
       this.guide.hidden = true;
     }
-    if (this.mode === "processing" || this.mode === "granted" || this.mode === "denied") text = null;
+    if (["processing", "granted", "denied", "challenge"].includes(this.mode)) text = null;
     if (text === this._coachText && kind === this._coachKind) return;
     this._coachText = text; this._coachKind = kind;
     this.coachEl.className = `cam-coach ${kind}`;
@@ -237,7 +237,7 @@ export class CameraPanel {
 
   setMode(mode, data = {}) {
     this.mode = mode;
-    this.picture.classList.remove("recording", "granted", "denied", "processing");
+    this.picture.classList.remove("recording", "granted", "denied", "processing", "challenge");
     if (mode !== "idle") this.picture.classList.add(mode);
     clear(this.center);
     this.countdown.hidden = mode !== "recording";
@@ -246,7 +246,19 @@ export class CameraPanel {
     this.ringBar.setAttribute("stroke-dashoffset", mode === "granted" || mode === "denied" ? "0" : "100");
     void this.ringBar.getBoundingClientRect();        // apply before re-enabling the transition
     this.ringBar.style.transition = "";
-    if (mode === "recording") {
+    if (mode === "challenge" && data.step) {
+      // Liveness instruction, large and centred: a random request a photo or
+      // a recorded video cannot follow.
+      const st = data.step;
+      const big = st.kind === "fingers"
+        ? h("div", { class: "ch-big" }, h("b", null, String(st.count)), icon("hand"))
+        : h("div", { class: "ch-big" }, icon(st.direction === "left" ? "arrowLeft" : "arrowRight"));
+      const text = st.kind === "fingers"
+        ? `Show ${st.count} finger${st.count === 1 ? "" : "s"} (no thumb)`
+        : `Turn your head ${st.direction === "left" ? "to the left" : "to the right"}, then back`;
+      add(this.center, h("div", { class: "cam-challenge" }, big, h("strong", null, text),
+        h("small", null, `Step ${data.index + 1} of ${data.total} · ${Math.ceil(data.remaining || 0)} s`)));
+    } else if (mode === "recording") {
       this.setProgress({ progress: 0, duration: data.duration || 3, hand_frames: 0 });
     } else if (mode === "processing") {
       add(this.center, h("div", { class: "cam-message" }, h("div", { class: "spinner" }),

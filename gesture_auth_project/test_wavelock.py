@@ -9,6 +9,7 @@ exercised end to end in a temporary templates directory.
 
 import os
 import sys
+import time
 import shutil
 import tempfile
 import subprocess
@@ -684,6 +685,189 @@ def test_owner_verification_window():
             f.write("{broken")
         assert not al.verified_recently("alice", tmp, now=t + 120)             # damaged: fails closed
         assert "alice" in al.OWNER_REQUIRED_MESSAGE.format(user="alice")
+
+
+def finger_pose(n_extended, wrist=(0.5, 0.65), hand_scale=0.18):
+    """Raw-coordinate hand frame with the first n of index..pinky extended."""
+    names = ["index", "middle", "ring", "pinky"]
+    state = {f: (f in names[:n_extended]) for f in FINGERS}
+    pose = _build_hand_frame(state)
+    frame = np.array([wrist[0], wrist[1], 0.0]) + pose * hand_scale
+    frame[:, 0] = wrist[0] + pose[:, 0] * hand_scale / ASPECT
+    return frame
+
+
+def face_row(yaw):
+    """YuNet-style row: eyes 50 px apart, nose offset = yaw eye-distances."""
+    row = np.zeros(15, np.float32)
+    row[0:4] = [270, 50, 110, 140]
+    row[4:6] = [300, 100]
+    row[6:8] = [350, 100]
+    row[8:10] = [325 + 50 * yaw, 125]
+    return row
+
+
+def test_liveness_challenge_logic():
+    from utils import liveness as lv
+    for n in range(5):
+        assert lv.count_extended_fingers(finger_pose(n)) == n
+    assert lv.count_extended_fingers(None) is None
+    assert abs(lv.yaw_proxy(face_row(0.2)) - 0.2) < 1e-6 and lv.yaw_proxy(None) is None
+
+    t = 100.0
+    ch = lv.Challenge([{"kind": "fingers", "count": 3}, {"kind": "head", "direction": "left"}], now=t)
+    ch.feed_hand(2, t + 0.1)                                   # wrong count
+    ch.feed_hand(3, t + 0.2)
+    ch.feed_hand(3, t + 0.2 + lv.HOLD_SEC / 2)                 # not held long enough
+    assert ch.index == 0
+    ch.feed_hand(1, t + 0.5)                                   # broken hold restarts
+    ch.feed_hand(3, t + 0.6)
+    ch.feed_hand(3, t + 0.6 + lv.HOLD_SEC + 0.01)             # margin: float rounding
+    assert ch.index == 1 and ch.state == "running"
+    ch.feed_face(0.02, t + 1.0); ch.feed_face(0.00, t + 1.2)   # frontal baseline
+    ch.feed_face(0.25, t + 1.4); ch.feed_face(0.30, t + 1.6)   # turned the WRONG way
+    assert ch.state == "running"
+    ch.feed_face(-0.15, t + 1.8)
+    ch.feed_face(None, t + 2.0)                                # face lost: hits reset
+    ch.feed_face(-0.15, t + 2.2)
+    assert ch.state == "running"
+    ch.feed_face(-0.14, t + 2.4)
+    assert ch.state == "passed", ch.public(t + 2.4)
+
+    # a flat photo: tilting it barely changes the nose/eye ratio
+    ch = lv.Challenge([{"kind": "head", "direction": "right"}], now=t)
+    for k, yaw in enumerate([0.01, 0.0, 0.03, 0.04, 0.05, 0.04, 0.06]):
+        ch.feed_face(yaw, t + 0.25 * k)
+    ch.tick(t + lv.CHALLENGE_TIMEOUT_SEC + 1)
+    assert ch.state == "failed" and ch.reason == "liveness_timeout_head_turn"
+    ch = lv.Challenge([{"kind": "fingers", "count": 2}], now=t)
+    ch.tick(t + lv.CHALLENGE_TIMEOUT_SEC + 1)
+    assert ch.state == "failed" and ch.reason == "liveness_timeout_fingers"
+
+    import random
+    for seed in range(40):
+        c = lv.new_challenge(True, rng=random.Random(seed))
+        assert c.steps[0]["kind"] == "fingers" and 1 <= c.steps[0]["count"] <= 4
+        assert c.steps[1]["kind"] == "head" and c.steps[1]["direction"] in ("left", "right")
+        c = lv.new_challenge(False, rng=random.Random(seed))
+        assert [s["kind"] for s in c.steps] == ["fingers", "fingers"]
+        assert c.steps[0]["count"] != c.steps[1]["count"]
+    pub = lv.new_challenge(True).public()
+    assert set(pub) == {"state", "reason", "index", "steps", "remaining"}
+
+
+def run_desktop_signin(tmp, gesture_raw, answer_challenge=True, timeout=None):
+    """
+    Drive gesture_auth.main() (the desktop sign-in loop) with a fake camera,
+    a fake MediaPipe and scripted keys: R once the window is up, Q after the
+    result. The fake hand shows the requested finger count while a liveness
+    challenge runs (when answer_challenge), then replays gesture_raw.
+    Returns the last attempt-log entry.
+    """
+    import json
+    import types
+    import cv2
+    import gesture_auth as ga
+    from utils import liveness as lv
+
+    holder = {"ch": None, "passed_at": None, "frames": 0, "result_seen": False}
+    real_new = ga.new_challenge
+
+    def tracked_challenge(face_enrolled):
+        holder["ch"] = real_new(face_enrolled)
+        return holder["ch"]
+
+    def landmarks_now():
+        ch = holder["ch"]
+        if ch is not None and ch.state == "running":
+            return finger_pose(ch.step["count"]) if answer_challenge else finger_pose(0)
+        if ch is not None and ch.state == "passed":
+            if holder["passed_at"] is None:
+                holder["passed_at"] = time.time()
+            k = (time.time() - holder["passed_at"]) / ga.RECORDING_DURATION_SEC
+            return gesture_raw[min(len(gesture_raw) - 1, int(k * (len(gesture_raw) - 1)))]
+        return gesture_raw[0]
+
+    class Hands:
+        def process(self, rgb):
+            lm = landmarks_now()
+            pts = [types.SimpleNamespace(x=float(x), y=float(y), z=float(z)) for x, y, z in lm]
+            return types.SimpleNamespace(multi_hand_landmarks=[types.SimpleNamespace(landmark=pts)])
+
+        def close(self):
+            pass
+
+    class Cap:
+        def read(self):
+            time.sleep(0.01)
+            return True, np.full((480, 640, 3), 60, np.uint8)
+
+        def release(self):
+            pass
+
+    keys = {"n": 0}
+
+    def wait_key(ms):
+        keys["n"] += 1
+        if keys["n"] == 5:
+            return ord("r")
+        if "ACCESS" in out.getvalue() or "LIVENESS CHECK FAILED" in out.getvalue():
+            return ord("q")
+        if keys["n"] > 3000:                        # safety net: never hang the suite
+            return ord("q")
+        return 255
+
+    import io
+    import contextlib
+    out = io.StringIO()
+    saved = {k: getattr(ga, k) for k in ("TEMPLATES_DIR", "list_registered_users", "load_user_profile",
+                                         "update_templates_if_high_confidence", "setup_mediapipe",
+                                         "setup_camera", "new_challenge", "RECORDING_DURATION_SEC")}
+    saved_cv = {k: getattr(cv2, k) for k in ("imshow", "waitKey", "namedWindow", "destroyAllWindows")}
+    saved_timeout, saved_argv = lv.CHALLENGE_TIMEOUT_SEC, sys.argv
+    try:
+        ga.TEMPLATES_DIR = tmp
+        ga.list_registered_users = lambda: gc.list_registered_users(tmp)
+        ga.load_user_profile = lambda u: gc.load_user_profile(u, templates_dir=tmp)
+        ga.update_templates_if_high_confidence = (
+            lambda *a, **k: saved["update_templates_if_high_confidence"](*a, templates_dir=tmp, **k))
+        ga.setup_mediapipe = lambda: (Hands(), types.SimpleNamespace(HAND_CONNECTIONS=[]),
+                                      types.SimpleNamespace(draw_landmarks=lambda *a, **k: None),
+                                      types.SimpleNamespace(get_default_hand_landmarks_style=lambda: None,
+                                                            get_default_hand_connections_style=lambda: None))
+        ga.setup_camera = lambda camera_index=None: Cap()
+        ga.new_challenge = tracked_challenge
+        ga.RECORDING_DURATION_SEC = 1.0
+        if timeout is not None:
+            lv.CHALLENGE_TIMEOUT_SEC = timeout
+        cv2.imshow = lambda *a, **k: None
+        cv2.waitKey = wait_key
+        cv2.namedWindow = lambda *a, **k: None
+        cv2.destroyAllWindows = lambda *a, **k: None
+        sys.argv = ["gesture_auth.py", "--user", "alice"]
+        with contextlib.redirect_stdout(out):
+            ga.main()
+    finally:
+        for k, v in saved.items():
+            setattr(ga, k, v)
+        for k, v in saved_cv.items():
+            setattr(cv2, k, v)
+        lv.CHALLENGE_TIMEOUT_SEC, sys.argv = saved_timeout, saved_argv
+    with open(os.path.join(tmp, ".attempts", "alice.log")) as f:
+        return json.loads(f.readlines()[-1]), out.getvalue()
+
+
+def test_desktop_signin_with_liveness():
+    with TempDir() as tmp:
+        register(tmp)
+        entry, text = run_desktop_signin(tmp, genuine_set(1, seed=31)[0])
+        assert entry["granted"] is True, (entry, text[-800:])
+        assert "[LIVE] Passed" in text
+        entry, text = run_desktop_signin(tmp, genuine_set(1, seed=31)[0],
+                                         answer_challenge=False, timeout=1.5)
+        assert entry["granted"] is False and entry["reason"] == "liveness_timeout_fingers", entry
+        assert "LIVENESS CHECK FAILED" in text
+        assert "Registered users" not in text          # names are not listed in normal mode
 
 
 ALL = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]

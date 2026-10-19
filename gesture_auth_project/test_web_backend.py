@@ -74,6 +74,7 @@ class SimTracker:
         self.hand_visible = True
         self.hide_during_recording = False
         self.idle = tw.synth_raw(seed=1)[0]
+        self.override = None              # still pose shown outside recordings (liveness)
         self.warm = False
 
     def play(self, raw):
@@ -97,7 +98,7 @@ class SimTracker:
             progress = rec.progress() if rec is not None else 1.0
             lm = self.queue[min(len(self.queue) - 1, int(progress * (len(self.queue) - 1)))]
         else:
-            lm = self.idle
+            lm = self.override if self.override is not None else self.idle
         h, w = frame.shape[:2]
         pts = [(int(x * w), int(y * h)) for x, y, _ in lm]
         for a, b in self.CONNECTIONS:
@@ -113,6 +114,7 @@ class SimTracker:
 class SimFaceOps:
     def __init__(self):
         self.face_present = True
+        self.yaw = 0.0                    # nose offset in eye distances (head turn)
         self.delay = 0.0                  # seconds per model call (slow laptop on battery)
         rng = np.random.RandomState(11)
         self.identity = rng.randn(128).astype(np.float32)
@@ -122,7 +124,7 @@ class SimFaceOps:
         time.sleep(self.delay)
         if not self.face_present:
             return None, None
-        return np.zeros(15, np.float32), (270, 50, 110, 140)
+        return tw.face_row(self.yaw), (270, 50, 110, 140)
 
     def embed(self, frame, face_row):
         return self.identity + np.random.normal(0, 0.01, 128).astype(np.float32)
@@ -134,8 +136,48 @@ class SimFaceOps:
         return match, score, conf, (270, 50, 110, 140), reason
 
 
-def make_app(templates_dir, debug=False):
-    """Start a real WaveLockServer on a free port with the simulated camera."""
+class LivenessSolver(threading.Thread):
+    """Plays the user's part of a liveness challenge on the simulated camera:
+    shows the requested number of fingers, then turns the head the requested
+    way after a frontal moment (so the baseline is taken first)."""
+
+    def __init__(self, camera, tracker, face_ops):
+        super().__init__(daemon=True)
+        self.camera, self.tracker, self.face_ops = camera, tracker, face_ops
+        self.enabled = True
+        self.turn_head = True             # False = a flat photo: it cannot turn
+        self.stopped = False
+
+    def run(self):
+        step_seen = None
+        step_started = 0.0
+        while not self.stopped:
+            st = self.camera.challenge_state() if self.enabled else None
+            if st is None or st["state"] != "running":
+                if step_seen is not None:
+                    self.tracker.override = None
+                    self.face_ops.yaw = 0.0
+                    step_seen = None
+                time.sleep(0.02)
+                continue
+            step = st["steps"][st["index"]]
+            key = (st["index"], step["kind"])
+            if key != step_seen:
+                step_seen, step_started = key, time.time()
+                self.face_ops.yaw = 0.0
+            if step["kind"] == "fingers":
+                self.tracker.override = tw.finger_pose(step["count"])
+            else:
+                self.tracker.override = tw.finger_pose(2)           # hand stays up
+                if self.turn_head and time.time() - step_started > 0.8:   # after the baseline
+                    self.face_ops.yaw = -0.25 if step["direction"] == "left" else 0.25
+            time.sleep(0.02)
+
+
+def make_app(templates_dir, debug=False, liveness=True, auto_liveness=True):
+    """Start a real WaveLockServer on a free port with the simulated camera.
+    With liveness on, a LivenessSolver answers challenges unless
+    auto_liveness is False (tests of failing challenges)."""
     service_mod.RECORDING_DURATION_SEC = FAST_RECORDING_SEC
     face_ops = SimFaceOps()
     tracker = SimTracker()
@@ -146,11 +188,15 @@ def make_app(templates_dir, debug=False):
     camera = CameraService(source_factory=lambda idx: SimSource(idx, face_ops),
                            tracker_factory=tracker_factory, face_ops=face_ops)
     tracker.camera = camera
-    service = WaveLockService(camera, templates_dir=templates_dir, debug=debug)
+    service = WaveLockService(camera, templates_dir=templates_dir, debug=debug, liveness=liveness)
     server = WaveLockServer(service, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1},
                      daemon=True).start()
-    return App(server, service, camera, tracker, face_ops)
+    app = App(server, service, camera, tracker, face_ops)
+    app.solver = LivenessSolver(camera, tracker, face_ops)
+    app.solver.enabled = auto_liveness
+    app.solver.start()
+    return app
 
 
 class App:
@@ -191,6 +237,8 @@ class App:
         raise AssertionError(f"timed out waiting for {what}: {st}")
 
     def close(self):
+        if getattr(self, "solver", None) is not None:
+            self.solver.stopped = True
         self.service.shutdown()
         self.server.shutdown()
         self.server.server_close()
@@ -425,8 +473,10 @@ def test_face_enrolment_then_face_is_required():
 
 
 def test_busy_no_hand_and_camera_errors():
+    # liveness off: the "show your hand first" refusal belongs to the plain
+    # flow (with liveness the challenge itself asks for the hand)
     with tw.TempDir() as tmp:
-        app = make_app(tmp)
+        app = make_app(tmp, liveness=False)
         try:
             register_via_api(app)
             # An idle sign-in screen (e.g. a closed tab) must not block other pages.
@@ -534,6 +584,64 @@ def test_slow_face_models_do_not_starve_the_recording():
         finally:
             app.close()
             gesture_auth.verify_face_over_frames = real_check
+
+
+def test_liveness_challenge_flow():
+    from utils import liveness as lv
+    real_timeout = lv.CHALLENGE_TIMEOUT_SEC
+    lv.CHALLENGE_TIMEOUT_SEC = 3.0
+    try:
+        with tw.TempDir() as tmp:
+            app = make_app(tmp)                                   # liveness on (default)
+            try:
+                register_via_api(app, face=True)
+                genuine = tw.genuine_set(1, seed=31)[0]
+
+                # 1. owner answers the challenge -> normal decision, verification set
+                real = gesture_auth.verify_face_over_frames
+                gesture_auth.verify_face_over_frames = lambda f, e: {
+                    "match": True, "score": 0.8, "confidence": 0.9, "reason": None,
+                    "frames_checked": 6, "faces_detected": 6}
+                try:
+                    status, res = sign_in(app, "alice", genuine)
+                    assert status == 200 and res["granted"], res
+                finally:
+                    gesture_auth.verify_face_over_frames = real
+
+                # 2. a video cannot follow the instruction: nobody shows the fingers
+                app.solver.enabled = False
+                status, res = sign_in(app, "alice", genuine)
+                assert res["liveness_failed"] and res["liveness_reason"] == "liveness_timeout_fingers", res
+                assert not res["granted"] and res["attempts_left"] == 4
+
+                # 3. a flat photo: fingers shown, but the head never turns
+                app.solver.enabled, app.solver.turn_head = True, False
+                status, res = sign_in(app, "alice", genuine)
+                assert res["liveness_reason"] == "liveness_timeout_head_turn", res
+                app.solver.turn_head = True
+
+                # 4. someone else answers the challenge with their own face
+                app.face_ops.identity = -app.face_ops.identity
+                status, res = sign_in(app, "alice", genuine)
+                assert res["liveness_reason"] == "liveness_face_mismatch", res
+                app.face_ops.identity = -app.face_ops.identity
+                log = app.ok("GET", "/api/activity")
+                assert log["entries"][0]["granted"] is False
+
+                # 5. leaving the screen mid-challenge counts nothing
+                app.solver.enabled = False
+                before = al.load_attempt_state("alice", tmp)["consecutive_failures"]
+                app.ok("POST", "/api/auth/reset")
+                app.ok("POST", "/api/auth/record")
+                assert app.ok("GET", "/api/status")["auth"]["phase"] == "challenge"
+                app.ok("POST", "/api/auth/end")
+                time.sleep(0.3)
+                assert al.load_attempt_state("alice", tmp)["consecutive_failures"] == before
+                assert app.ok("GET", "/api/system")["liveness"] is True
+            finally:
+                app.close()
+    finally:
+        lv.CHALLENGE_TIMEOUT_SEC = real_timeout
 
 
 def test_status_reports_brightness_for_lighting_hint():

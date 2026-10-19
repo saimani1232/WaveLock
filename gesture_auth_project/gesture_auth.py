@@ -7,7 +7,11 @@ Runs real-time authentication by coupling:
   4. Multimodal Decision Fusion Engine
 
 Usage:
-    python gesture_auth.py [--user NAME] [--camera N] [--debug]
+    python gesture_auth.py [--user NAME] [--camera N] [--debug] [--no-liveness]
+
+[R] first runs a short liveness challenge (show N fingers; with a face
+enrolled, turn the head toward the arrow). The gesture recording starts
+when it is passed. --no-liveness skips it.
 
 By default only ACCESS GRANTED / DENIED is shown: per-gate scores would let
 an observer tune an imitation attempt by attempt. --debug shows them for
@@ -52,6 +56,7 @@ from gesture_capture import (
 )
 from utils.camera_utils import print_camera_diagnostics
 from utils.attempt_limit import record_attempt, seconds_locked
+from utils.liveness import new_challenge, count_extended_fingers, yaw_proxy
 
 
 # ============================================================================
@@ -547,6 +552,8 @@ def main():
     parser.add_argument("--user", "-u", dest="opt_user", type=str, default=None, help="Username to authenticate")
     parser.add_argument("--camera", "--cam", "-c", dest="camera", type=int, default=None, help="Camera index (default: auto-detect)")
     parser.add_argument("--list-cams", action="store_true", help="List available cameras and exit")
+    parser.add_argument("--no-liveness", action="store_true",
+                        help="Skip the liveness challenge before the gesture recording")
     parser.add_argument("--debug", action="store_true",
                         help="Developer mode: show per-gate scores and reasons "
                              "(helps an observer tune an imitation; not for real logins)")
@@ -628,6 +635,9 @@ def main():
         live_face_bbox = None                       # normal mode: detection only
         last_face_check = 0.0
         result_note = None
+        liveness_on = not args.no_liveness
+        challenge = None                            # utils.liveness.Challenge while answered
+        challenge_face = None                       # latest clean frame with a face
 
         while True:
             ret, frame = cap.read()
@@ -711,7 +721,7 @@ def main():
             # Normal mode only shows that a face is in view: a live match /
             # impostor label would let an attacker tune a photo for free,
             # without spending attempts.
-            if not is_recording and face_enrolled and not show_scores:
+            if not is_recording and challenge is None and face_enrolled and not show_scores:
                 now = time.time()
                 if now - last_face_check >= FACE_PREVIEW_INTERVAL_SEC:
                     live_face_bbox = detect_primary_face(clean_frame)[1]
@@ -721,7 +731,7 @@ def main():
                     cv2.rectangle(frame, (fx, fy), (fx + fw, fy + fh), COLOR_TEXT_MUTED, 2)
                     cv2.putText(frame, "Face in view", (fx, max(20, fy - 8)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
-            elif not is_recording and face_enrolled:
+            elif not is_recording and challenge is None and face_enrolled:
                 now = time.time()
                 if now - last_face_check >= FACE_PREVIEW_INTERVAL_SEC:
                     live_face = verify_face(clean_frame, profile["face_embedding"])
@@ -740,6 +750,71 @@ def main():
                         tag = f"[ALERT] Impostor ({live_score:.2f})"
                     cv2.rectangle(frame, (fx, fy), (fx + fw, fy + fh), box_color, 2)
                     cv2.putText(frame, tag, (fx, max(20, fy - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_color, 1, cv2.LINE_AA)
+
+            # ─── Liveness Challenge ───────────────────────────────────
+            if challenge is not None:
+                now = time.time()
+                challenge.feed_hand(count_extended_fingers(
+                    extract_landmarks(results.multi_hand_landmarks[0]) if hand_visible else None), now)
+                if face_enrolled:
+                    face_row, _ = detect_primary_face(clean_frame)
+                    if face_row is not None:
+                        challenge_face = clean_frame
+                    challenge.feed_face(yaw_proxy(face_row), now)
+                challenge.tick(now)
+                step = challenge.step
+                if step is not None:
+                    text = (f"SHOW {step['count']} FINGER{'S' if step['count'] > 1 else ''} (NO THUMB)"
+                            if step["kind"] == "fingers" else
+                            f"TURN YOUR HEAD {'<-- LEFT' if step['direction'] == 'left' else 'RIGHT -->'}")
+                    left_s = challenge.public(now)["remaining"]
+                    cv2.rectangle(frame, (0, h - 70), (w, h), (0, 0, 0), -1)
+                    cv2.putText(frame, text, (20, h - 38), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
+                                (60, 200, 250), 2, cv2.LINE_AA)
+                    cv2.putText(frame, f"Liveness check {challenge.index + 1}/{len(challenge.steps)}"
+                                       f"  -  {left_s:.0f} s left", (20, h - 14),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+                if challenge.state == "passed" and face_enrolled:
+                    # bind the challenge to the enrolled face (not a helper's)
+                    match = (challenge_face is not None and
+                             verify_face(challenge_face, profile["face_embedding"])[0])
+                    if not match:
+                        challenge.state = "failed"
+                        challenge.reason = ("liveness_no_face" if challenge_face is None
+                                            else "liveness_face_mismatch")
+                failed_reason = None
+                if challenge.state == "passed":
+                    challenge = None
+                    if hand_visible:
+                        is_recording = True
+                        recording_start_time = time.time()
+                        recorded_frames = []
+                        clean_frames_recorded = []
+                        result = new_result()
+                        print(f"  [LIVE] Passed. [REC] Perform your gesture for {RECORDING_DURATION_SEC} seconds...")
+                    else:
+                        failed_reason = "liveness_no_hand_for_gesture"
+                elif challenge.state == "failed":
+                    failed_reason = challenge.reason
+                    challenge = None
+                if failed_reason is not None:
+                    reason = failed_reason
+                    result = new_result()
+                    result["reason"] = reason
+                    result_frame = frame.copy()
+                    state = record_attempt(username, False, TEMPLATES_DIR, reason=reason)
+                    locked_until = time.time() + state["locked_for"]
+                    result_note = (f"Locked for {state['locked_for']:.0f} s" if state["locked_for"] > 0
+                                   else f"Attempts left before lockout: {state['attempts_left']}")
+                    print()
+                    print("  =============================")
+                    print("     LIVENESS CHECK FAILED")
+                    print("  =============================")
+                    print(f"  Reason: {reason}" if show_scores else
+                          "  The challenge was not completed in time or by the enrolled person.")
+                    print(f"  {result_note}")
+                    print("  Press [T] to try again, [Q] to quit.")
+                    show_result = True
 
             # ─── Recording Logic ──────────────────────────────────────
             remaining, progress = 0.0, 0.0
@@ -841,12 +916,17 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key in (ord('q'), ord('Q')):
                 break
-            elif key in (ord('r'), ord('R')) and not is_recording and not show_result:
+            elif (key in (ord('r'), ord('R')) and not is_recording and not show_result
+                  and challenge is None):
                 # Re-read from disk: another window may have failed meanwhile.
                 lock_left = seconds_locked(username, TEMPLATES_DIR)
                 locked_until = time.time() + lock_left
                 if lock_left > 0:
                     print(f"  [LOCKED] Try again in {lock_left:.0f} s.")
+                elif liveness_on:
+                    challenge = new_challenge(face_enrolled)
+                    challenge_face = None
+                    print("  [LIVE] Liveness check: follow the instruction on the screen.")
                 elif hand_visible:
                     is_recording = True
                     recording_start_time = time.time()
