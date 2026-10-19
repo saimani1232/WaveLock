@@ -625,6 +625,7 @@ def main():
         # ─── State ────────────────────────────────────────────────────
         is_recording = False
         recording_start_time = 0.0
+        skip_record_frame = False   # the frame that passed the liveness challenge is not recorded
         recorded_frames = []
         clean_frames_recorded = []
         show_result = False
@@ -787,6 +788,7 @@ def main():
                     challenge = None
                     if hand_visible:
                         is_recording = True
+                        skip_record_frame = True
                         recording_start_time = time.time()
                         recorded_frames = []
                         clean_frames_recorded = []
@@ -818,7 +820,11 @@ def main():
 
             # ─── Recording Logic ──────────────────────────────────────
             remaining, progress = 0.0, 0.0
-            if is_recording:
+            if is_recording and skip_record_frame:
+                # This frame still shows the challenge pose (the hand landmarks
+                # were read before the challenge passed): start with the next.
+                skip_record_frame = False
+            elif is_recording:
                 elapsed = time.time() - recording_start_time
                 remaining = max(0.0, RECORDING_DURATION_SEC - elapsed)
                 progress = min(1.0, elapsed / RECORDING_DURATION_SEC)

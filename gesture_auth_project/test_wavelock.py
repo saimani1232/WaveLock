@@ -822,7 +822,8 @@ def run_desktop_signin(tmp, gesture_raw, answer_challenge=True, timeout=None):
     out = io.StringIO()
     saved = {k: getattr(ga, k) for k in ("TEMPLATES_DIR", "list_registered_users", "load_user_profile",
                                          "update_templates_if_high_confidence", "setup_mediapipe",
-                                         "setup_camera", "new_challenge", "RECORDING_DURATION_SEC")}
+                                         "setup_camera", "new_challenge", "RECORDING_DURATION_SEC",
+                                         "evaluate_attempt")}
     saved_cv = {k: getattr(cv2, k) for k in ("imshow", "waitKey", "namedWindow", "destroyAllWindows")}
     saved_timeout, saved_argv = lv.CHALLENGE_TIMEOUT_SEC, sys.argv
     try:
@@ -838,6 +839,13 @@ def run_desktop_signin(tmp, gesture_raw, answer_challenge=True, timeout=None):
         ga.setup_camera = lambda camera_index=None: Cap()
         ga.new_challenge = tracked_challenge
         ga.RECORDING_DURATION_SEC = 1.0
+
+        def spy_evaluate(frames, *a):
+            # the frame that passed the challenge must not start the gesture
+            holder["challenge_pose_recorded"] = bool(frames) and any(
+                np.allclose(np.asarray(frames[0]), finger_pose(n)) for n in range(0, 5))
+            return saved["evaluate_attempt"](frames, *a)
+        ga.evaluate_attempt = spy_evaluate
         if timeout is not None:
             lv.CHALLENGE_TIMEOUT_SEC = timeout
         cv2.imshow = lambda *a, **k: None
@@ -853,6 +861,7 @@ def run_desktop_signin(tmp, gesture_raw, answer_challenge=True, timeout=None):
         for k, v in saved_cv.items():
             setattr(cv2, k, v)
         lv.CHALLENGE_TIMEOUT_SEC, sys.argv = saved_timeout, saved_argv
+    assert not holder.get("challenge_pose_recorded"), "the challenge frame was recorded"
     with open(os.path.join(tmp, ".attempts", "alice.log")) as f:
         return json.loads(f.readlines()[-1]), out.getvalue()
 
@@ -909,6 +918,22 @@ def test_encrypted_template_storage():
             assert "decrypt" in str(e).lower(), e
         else:
             raise AssertionError("tampered template accepted")
+
+
+def test_face_enrolment_combination():
+    from utils.face_auth import combine_face_embeddings, FACE_CONSISTENCY_MIN_COSINE
+    rng = np.random.RandomState(4)
+    me = rng.randn(128)
+    frames = [me * rng.uniform(5, 9) + rng.normal(0, 0.15 * np.linalg.norm(me) / 11, 128) for _ in range(5)]
+    master, why = combine_face_embeddings(frames)
+    assert why is None and master.shape == (128,) and abs(np.linalg.norm(master) - 1) < 1e-5
+    assert float(master @ (me / np.linalg.norm(me))) > 0.95
+    stranger = rng.randn(128)                                   # one frame of someone else
+    master, why = combine_face_embeddings(frames[:4] + [stranger])
+    assert master is None and why == "inconsistent_face_frames"
+    assert combine_face_embeddings([np.zeros(128)])[1] == "invalid_face_embedding"
+    assert combine_face_embeddings([])[1] == "no_face_frames"
+    assert 0.363 < FACE_CONSISTENCY_MIN_COSINE < 0.53
 
 
 ALL = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
