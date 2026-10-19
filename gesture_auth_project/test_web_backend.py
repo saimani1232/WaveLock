@@ -19,6 +19,7 @@ import numpy as np
 
 import test_wavelock as tw
 import gesture_auth
+from utils import attempt_limit as al
 import web_backend.service as service_mod
 from utils.face_auth import classify_face_score
 from web_backend.camera import CameraService, CameraError
@@ -333,7 +334,7 @@ def test_debug_mode_shows_scores():
             while app.ok("GET", "/api/benchmark/status")["state"] == "running" and time.time() < end:
                 time.sleep(0.5)
             out = app.ok("GET", "/api/benchmark/status")
-            assert out["state"] == "done" and "False Acceptance Rate" in out["output"], out
+            assert out["state"] == "done" and "ACCEPTANCE RATES PER ATTACK" in out["output"], out
         finally:
             app.close()
     with tw.TempDir() as tmp:
@@ -354,6 +355,13 @@ def test_existing_user_needs_confirmation_and_cancel_keeps_profile():
             before = sorted(os.listdir(os.path.join(tmp, "alice")))
             status, payload, _ = app.request("POST", "/api/register/begin", {"username": "Alice"})
             assert status == 409 and payload["code"] == "exists"
+            # only the owner may replace a profile: refused until alice signs in
+            status, payload, _ = app.request("POST", "/api/register/begin",
+                                             {"username": "alice", "overwrite": True})
+            assert status == 403 and payload["code"] == "owner_signin_required", payload
+            status, res = sign_in(app, "alice", tw.genuine_set(1, seed=31)[0])
+            assert res["granted"], res
+            app.ok("POST", "/api/auth/end")
             st = app.ok("POST", "/api/register/begin", {"username": "alice", "overwrite": True})
             assert st["replacing"] is True
             app.ok("POST", "/api/register/face/skip")
@@ -382,12 +390,20 @@ def test_face_enrolment_then_face_is_required():
             assert os.path.exists(os.path.join(tmp, "alice", "face_embedding.npy"))
             app.face_ops.identity = -app.face_ops.identity           # someone else's face
             app.ok("POST", "/api/camera/start", {})
+            # changing the face needs a recent sign-in by the owner
+            status, payload, _ = app.request("POST", "/api/face/enroll", {"username": "alice"})
+            assert status == 403 and payload["code"] == "owner_signin_required", payload
+            al.record_attempt("alice", True, tmp)                     # owner signed in just now
             app.ok("POST", "/api/face/enroll", {"username": "alice"})
             st = app.wait(lambda s: s["face"]["status"] != "capturing", what="face enrol")
             assert st["face"]["status"] == "done", st["face"]
             app.ok("POST", "/api/face/close")
             stored = np.load(os.path.join(tmp, "alice", "face_embedding.npy"))
             assert float(np.dot(stored, app.face_ops.identity)) > 0.99
+            # the verification is used up by the change
+            assert not al.verified_recently("alice", tmp)
+            status, payload, _ = app.request("POST", "/api/face/enroll", {"username": "alice"})
+            assert status == 403, payload
 
             def fake_face(match):
                 def verify(frames, emb):

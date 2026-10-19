@@ -11,8 +11,16 @@ folder name starts with a dot, so list_registered_users() ignores it. Each
 attempt is also appended to templates/.attempts/<user>.log (one JSON object
 per line) for later analysis.
 
+Owner verification: a granted sign-in is remembered for
+OWNER_VERIFICATION_SEC. Re-registering a username or changing its face is
+only allowed inside that window (verified_recently), and a successful change
+consumes it (consume_verification). Any failed attempt clears it.
+
 Limits: the files are ordinary local files. Anyone who can delete them can
 reset the counter; protecting them needs operating-system access control.
+Editing the state file to fake a verification is possible for the same
+reason; deleting a profile folder by hand stays the reset for a forgotten
+gesture.
 """
 
 import json
@@ -25,6 +33,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 LOCKOUT_BASE_SEC = 30
 LOCKOUT_MAX_SEC = 900
 ATTEMPTS_DIRNAME = ".attempts"
+OWNER_VERIFICATION_SEC = 600         # sign-in -> re-register / change face window
 
 
 def _paths(username, templates_dir):
@@ -35,7 +44,7 @@ def _paths(username, templates_dir):
 
 
 def _fresh_state():
-    return {"consecutive_failures": 0, "lockouts": 0, "locked_until": 0.0}
+    return {"consecutive_failures": 0, "lockouts": 0, "locked_until": 0.0, "verified_at": 0.0}
 
 
 def load_attempt_state(username, templates_dir, now=None):
@@ -55,11 +64,12 @@ def load_attempt_state(username, templates_dir, now=None):
             "consecutive_failures": int(state.get("consecutive_failures", 0)),
             "lockouts": int(state.get("lockouts", 0)),
             "locked_until": float(state.get("locked_until", 0.0)),
+            "verified_at": float(state.get("verified_at", 0.0)),
         }
     except (ValueError, TypeError, OSError):
         now = time.time() if now is None else now
         return {"consecutive_failures": 0, "lockouts": 1,
-                "locked_until": now + LOCKOUT_BASE_SEC}
+                "locked_until": now + LOCKOUT_BASE_SEC, "verified_at": 0.0}
 
 
 def _save_state(username, templates_dir, state):
@@ -96,7 +106,9 @@ def record_attempt(username, granted, templates_dir, reason=None, now=None):
 
     if granted:
         state = _fresh_state()
+        state["verified_at"] = now
     else:
+        state["verified_at"] = 0.0          # a failed attempt ends any verification
         state["consecutive_failures"] += 1
         if state["consecutive_failures"] >= MAX_CONSECUTIVE_FAILURES:
             state["lockouts"] += 1
@@ -117,3 +129,25 @@ def record_attempt(username, granted, templates_dir, reason=None, now=None):
     return dict(state,
                 attempts_left=MAX_CONSECUTIVE_FAILURES - state["consecutive_failures"],
                 locked_for=max(0.0, state["locked_until"] - now))
+
+
+def verified_recently(username, templates_dir, within=OWNER_VERIFICATION_SEC, now=None):
+    """True when the user signed in successfully less than `within` s ago."""
+    now = time.time() if now is None else now
+    verified_at = load_attempt_state(username, templates_dir, now)["verified_at"]
+    return 0.0 < verified_at <= now and now - verified_at <= within
+
+
+def consume_verification(username, templates_dir):
+    """Use up the verification after a profile change (one change per sign-in)."""
+    state = load_attempt_state(username, templates_dir)
+    if state.get("verified_at"):
+        state["verified_at"] = 0.0
+        _save_state(username, templates_dir, state)
+
+
+OWNER_REQUIRED_MESSAGE = (
+    "Only the owner can change an existing profile. Sign in as '{user}' first "
+    "(web UI or gesture_auth.py), then re-register or change the face within "
+    f"{OWNER_VERIFICATION_SEC // 60} minutes."
+)

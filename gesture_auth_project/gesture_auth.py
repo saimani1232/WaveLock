@@ -318,7 +318,7 @@ def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
 
         note = result_info.get("note")
         if show_scores:
-            cv2.putText(canvas, f"Fused Multi-Score: {fused:.1%}", (sx + 15, sy + 74),
+            cv2.putText(canvas, f"Gesture fused score: {fused:.1%}", (sx + 15, sy + 74),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_TEXT_WHITE, 1, cv2.LINE_AA)
             if not granted and reason:
                 cv2.putText(canvas, f"Reason: {reason[:26]}", (sx + 15, sy + 88),
@@ -329,7 +329,7 @@ def build_dashboard(cam_frame, state="IDLE", username="User", threshold=2.13,
     else:
         cv2.putText(canvas, "Conjunctive Consensus Enforced", (sx + 15, sy + 42),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_TEXT_MUTED, 1, cv2.LINE_AA)
-        cv2.putText(canvas, "Weights: 40% Face | 35% Gesture | 25% Hand", (sx + 15, sy + 64),
+        cv2.putText(canvas, "Every check must pass (face, gesture, hand)", (sx + 15, sy + 64),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.33, (140, 140, 140), 1, cv2.LINE_AA)
 
     return canvas
@@ -565,7 +565,8 @@ def main():
         print()
         return
 
-    print(f"\n  Registered users: {', '.join(registered_users)}")
+    if args.debug:                                    # names are not public in normal mode
+        print(f"\n  Registered users: {', '.join(registered_users)}")
 
     raw_user = args.opt_user or args.user
     if not raw_user:

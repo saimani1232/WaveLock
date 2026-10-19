@@ -146,7 +146,18 @@ export default {
                 "when the new registration is saved. The current face is kept unless you capture a new one.",
               confirmLabel: "Re-register", danger: true });
             if (ok) {
-              try { reg = await api.registerBegin(name, true, pose); } catch (ex2) { err.textContent = ex2.message; }
+              try {
+                reg = await api.registerBegin(name, true, pose);
+              } catch (ex2) {
+                if (ex2.code === "owner_signin_required") {
+                  // only the owner may replace a profile: offer the sign-in
+                  fill(err, h("span", null, ex2.message, " "),
+                    h("a", { class: "btn sm primary", href: `#/signin?user=${encodeURIComponent(name)}` },
+                      icon("signin"), `Sign in as ${name}`));
+                } else {
+                  err.textContent = ex2.message;
+                }
+              }
             }
           } else {
             err.textContent = ex.message;

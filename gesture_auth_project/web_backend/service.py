@@ -523,6 +523,9 @@ class WaveLockService:
             raise ApiError(409, f"User '{name}' already exists. Confirm to re-register "
                                 f"(the old profile is replaced when the new one is saved).",
                            "exists")
+        if exists and not al.verified_recently(name, self.templates_dir):
+            # Only the owner may replace a profile (code review 2026-10-13).
+            raise ApiError(403, al.OWNER_REQUIRED_MESSAGE.format(user=name), "owner_signin_required")
         if pose_method not in ("legacy", "aspect"):
             raise ApiError(400, "pose_method must be 'legacy' or 'aspect'.")
         if self.reg is not None and self.reg["status"] == "active":
@@ -699,6 +702,8 @@ class WaveLockService:
             name, samples, threshold, pairwise, templates_dir=self.templates_dir,
             raw_samples=raw_samples, frame_aspect=frame_aspect,
             face_embedding=r["face_embedding"], pose_method=r["pose_method"])
+        if r["replacing"]:
+            al.consume_verification(name, self.templates_dir)
         config = _read_config(name, self.templates_dir)
         if r["face_embedding"] is not None:
             face = "enrolled"
@@ -807,6 +812,9 @@ class WaveLockService:
     # ------------------------------------------------------------ face enrolment
     def face_enroll_begin(self, raw_username):
         name = self._username(raw_username)
+        if not al.verified_recently(name, self.templates_dir):
+            # Adding or replacing the face of a profile is a profile change.
+            raise ApiError(403, al.OWNER_REQUIRED_MESSAGE.format(user=name), "owner_signin_required")
         self._claim("face")
         try:
             fcap = self._start_face_capture()
@@ -830,6 +838,7 @@ class WaveLockService:
                 else:
                     save_face_embedding(f["username"], master, self.templates_dir)
                     set_face_enrolled_flag(f["username"], self.templates_dir)
+                    al.consume_verification(f["username"], self.templates_dir)
                     status, message = "done", "Face enrolled. It is checked at every sign-in."
         except (OSError, ValueError) as e:
             status, message = "failed", f"Could not save the face profile: {e}"

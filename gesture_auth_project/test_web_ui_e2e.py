@@ -19,6 +19,7 @@ os.chdir(PROJ)
 os.makedirs(OUT, exist_ok=True)
 
 import test_wavelock as tw
+from utils import attempt_limit as al
 import gesture_auth
 from test_web_backend import make_app, WRONG_ORDER
 
@@ -56,6 +57,9 @@ def console_errors(d, label):
         if entry["level"] in ("SEVERE",) or "Content Security Policy" in entry["message"]:
             # aborted MJPEG streams on navigation are expected
             if "/api/stream" in entry["message"] and "net::ERR" in entry["message"]:
+                continue
+            # API refusals the page handles itself (e.g. 403 owner sign-in required)
+            if "/api/" in entry["message"] and "status of 4" in entry["message"]:
                 continue
             problems.append(f"[{label}] console: {entry['message'][:300]}")
 
@@ -247,7 +251,7 @@ def run(debug):
             d.get(base + "/#/security")
             wait_text(d, "SIMULATED benchmarks")
             click(d, d.find_element(By.XPATH, "//button[contains(., 'Run benchmark')]"))
-            wait_text(d, "False Acceptance Rate", 600)
+            wait_text(d, "ACCEPTANCE RATES PER ATTACK", 600)
             d.execute_script("window.scrollTo(0, document.body.scrollHeight)")
             shot(d, f"{tag}_21_benchmark")
 
@@ -257,8 +261,18 @@ def run(debug):
         click(d, d.find_element(By.XPATH, "//button[contains(., 'Replace face')]"))
         wait_text(d, "Capture face")
         check_preview(d, f"{tag}/face-dialog")
-        WebDriverWait(d, 20).until(EC.element_to_be_clickable(
-            (By.XPATH, "//div[contains(@class,'modal')]//button[contains(., 'Capture face') and not(@disabled)]"))).click()
+        capture_xp = "//div[contains(@class,'modal')]//button[contains(., 'Capture face') and not(@disabled)]"
+        # The last attempt was a denial, so the owner check refuses the change...
+        WebDriverWait(d, 20).until(EC.element_to_be_clickable((By.XPATH, capture_xp))).click()
+        wait_text(d, "Sign in as alice", 20)
+        shot(d, f"{tag}_21b_face_owner_required")
+        # ...until alice has signed in successfully (simulated grant).
+        al.record_attempt("alice", True, tmp)
+        d.find_element(By.XPATH, "//div[contains(@class,'modal')]//button[contains(., 'Close')]").click()
+        WebDriverWait(d, 10).until(lambda drv: not drv.find_elements(By.CSS_SELECTOR, ".modal-backdrop"))
+        click(d, d.find_element(By.XPATH, "//button[contains(., 'Replace face')]"))
+        wait_text(d, "Capture face")
+        WebDriverWait(d, 20).until(EC.element_to_be_clickable((By.XPATH, capture_xp))).click()
         wait_text(d, "Face enrolled", 30)
         shot(d, f"{tag}_22_face_dialog_done")
         d.find_element(By.XPATH, "//div[contains(@class,'modal')]//button[contains(., 'Close')]").click()

@@ -64,6 +64,7 @@ from utils.face_auth import (
     detect_primary_face,
     extract_face_embedding,
 )
+from utils.attempt_limit import verified_recently, consume_verification, OWNER_REQUIRED_MESSAGE
 from utils.camera_utils import (
     open_camera,
     print_camera_diagnostics,
@@ -639,9 +640,7 @@ def main():
     print()
 
     # ─── Get username ─────────────────────────────────────────────────
-    existing_users = list_registered_users()
-    if existing_users:
-        print(f"  Existing users: {', '.join(existing_users)}")
+    existing_users = list_registered_users()     # not printed: names are not public
     print()
     raw_user = args.opt_user or args.user
     if not raw_user:
@@ -651,6 +650,12 @@ def main():
         username = normalize_username(raw_user)
     except ValueError as e:
         print(f"  {e}")
+        return
+
+    if username in existing_users and not verified_recently(username, TEMPLATES_DIR):
+        # Only the owner may replace a profile (code review 2026-10-13).
+        print(f"  {OWNER_REQUIRED_MESSAGE.format(user=username)}")
+        print(f"    python gesture_auth.py --user {username}")
         return
 
     if username in existing_users:
@@ -779,6 +784,8 @@ def main():
             raw_samples=raw_samples, frame_aspect=frame_aspect,
             face_embedding=face_embedding, pose_method=pose_method,
         )
+        if username in existing_users:
+            consume_verification(username, TEMPLATES_DIR)
     except (OSError, ValueError) as e:
         print(f"  ERROR: Could not save registration: {e}")
         print("  Existing profile (if any) is unchanged.")

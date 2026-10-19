@@ -354,7 +354,9 @@ def test_evaluation_scripts_run():
                 capture_output=True, text=True, cwd=here, timeout=600,
             )
             assert out.returncode == 0, f"{script} failed:\n{out.stdout}\n{out.stderr}"
-            assert "False Acceptance Rate" in out.stdout, out.stdout
+            # per-attack reporting (no pooled FAR since semester 2)
+            assert "ACCEPTANCE RATES PER ATTACK" in out.stdout, out.stdout
+            assert "False Acceptance Rate" not in out.stdout
         out = subprocess.run(
             [sys.executable, os.path.join(here, "evaluate_biometric_security.py"),
              "--user", "nobody", "--templates-dir", tmp],
@@ -661,6 +663,27 @@ def test_real_recording_evaluation_tool():
         assert s["impostor"]["granted"]["k"] == 0 and s["impostor"]["dtw_knn"]["k"] == 0
         after = {f: os.path.getmtime(os.path.join(tmp, "alice", f)) for f in os.listdir(os.path.join(tmp, "alice"))}
         assert before == after, "evaluation must not write to the templates folder"
+
+
+def test_owner_verification_window():
+    from utils import attempt_limit as al
+    with TempDir() as tmp:
+        t = 5000.0
+        assert not al.verified_recently("alice", tmp, now=t)                  # never signed in
+        al.record_attempt("alice", True, tmp, now=t)
+        assert al.verified_recently("alice", tmp, now=t + 60)
+        assert not al.verified_recently("alice", tmp, now=t + al.OWNER_VERIFICATION_SEC + 1)
+        assert not al.verified_recently("bob", tmp, now=t + 60)                # per user
+        al.record_attempt("alice", False, tmp, now=t + 70)                     # failure clears it
+        assert not al.verified_recently("alice", tmp, now=t + 80)
+        al.record_attempt("alice", True, tmp, now=t + 90)
+        al.consume_verification("alice", tmp)                                  # one change per sign-in
+        assert not al.verified_recently("alice", tmp, now=t + 100)
+        al.record_attempt("alice", True, tmp, now=t + 110)
+        with open(os.path.join(tmp, ".attempts", "alice.json"), "w") as f:
+            f.write("{broken")
+        assert not al.verified_recently("alice", tmp, now=t + 120)             # damaged: fails closed
+        assert "alice" in al.OWNER_REQUIRED_MESSAGE.format(user="alice")
 
 
 ALL = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]

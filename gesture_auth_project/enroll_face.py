@@ -16,6 +16,7 @@ from utils.face_auth import (
     save_face_embedding,
 )
 from utils.camera_utils import open_camera, print_camera_diagnostics
+from utils.attempt_limit import verified_recently, consume_verification, OWNER_REQUIRED_MESSAGE
 from gesture_compare import (
     TEMPLATES_DIR,
     list_registered_users,
@@ -159,8 +160,7 @@ def main():
 
     raw_user = args.user
     if not raw_user:
-        print(f"  Registered users: {', '.join(registered)}")
-        raw_user = input("  Enroll face for: ")
+        raw_user = input("  Enroll face for: ")         # names are not listed
     try:
         user = normalize_username(raw_user)
     except ValueError as e:
@@ -168,10 +168,17 @@ def main():
         sys.exit(1)
     if user not in registered:
         print(f"  ERROR: User '{user}' is not registered. Register the gesture first "
-              f"with gesture_capture.py (registered: {', '.join(registered)}).")
+              f"with gesture_capture.py.")
+        sys.exit(1)
+    if not verified_recently(user, TEMPLATES_DIR):
+        # Adding or replacing a face changes the profile: owner only.
+        print(f"  {OWNER_REQUIRED_MESSAGE.format(user=user)}")
+        print(f"    python gesture_auth.py --user {user}")
         sys.exit(1)
 
     ok = enroll_face_interactive(user, camera_index=args.cam)
+    if ok:
+        consume_verification(user, TEMPLATES_DIR)
     sys.exit(0 if ok else 1)
 
 

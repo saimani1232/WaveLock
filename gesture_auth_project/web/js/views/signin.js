@@ -299,7 +299,8 @@ export default {
         } else if (r.granted) {
           add(action, h("div", { class: "decision ok" }, h("span", { class: "d-icon" }, lockIcon(true)),
             h("div", null, h("h3", null, "Access granted"),
-              h("p", { class: "small muted" }, `Welcome, ${s.username}. All checks agreed.`))));
+              h("p", { class: "small muted" }, `Welcome, ${s.username}. All checks agreed. ` +
+                "For the next 10 minutes you can also re-register or change your face (Users page)."))));
         } else {
           add(action, h("div", { class: "decision danger shake" }, h("span", { class: "d-icon" }, lockIcon(false)),
             h("div", null, h("h3", null, "Access denied"),

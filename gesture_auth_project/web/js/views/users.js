@@ -24,7 +24,17 @@ function faceDialog(app, user, onDone) {
       app.poll();
     } catch (e) {
       startBtn.disabled = false;
-      toast(e.message, "danger");
+      if (e.code === "owner_signin_required") {
+        // only the owner may change the face of a profile: offer the sign-in
+        startBtn.disabled = true;
+        fill(status, h("span", null, e.message, " "),
+          h("button", { class: "btn sm primary", type: "button", onclick: () => {
+            dlg.close(null);
+            app.go(`signin?user=${encodeURIComponent(user.name)}`);
+          } }, icon("signin"), `Sign in as ${user.name}`));
+      } else {
+        toast(e.message, "danger");
+      }
     }
   });
 
