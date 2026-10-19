@@ -367,8 +367,12 @@ class WaveLockService:
         a = self.auth
         if a is None or self.activity != "auth":
             raise ApiError(409, "Enter a username to start signing in.", "no_session")
+        if a["phase"] == "challenge" and a.get("ready_until"):
+            a["go"].set()                     # liveness passed: the user starts the recording
+            return self._auth_state()
         if a["phase"] in ("challenge", "recording", "processing"):
             raise ApiError(409, "An attempt is already running.", "busy")
+        a["notice"] = None
         left = al.seconds_locked(a["username"], self.templates_dir)
         if left > 0:
             raise ApiError(423, f"Too many failed attempts. Try again in {left:.0f} s.", "locked")
@@ -399,7 +403,9 @@ class WaveLockService:
             a["error"] = None
             a["attempt"] += 1
             a["job"] = job
-            a["get_ready_until"] = None
+            a["ready_until"] = None
+            a["go"] = threading.Event()
+            a["notice"] = None
         threading.Thread(target=self._challenge_worker, args=(a, job), daemon=True).start()
         return self._auth_state()
 
@@ -424,12 +430,19 @@ class WaveLockService:
         if ch.state != "passed":
             self._liveness_failed(a, ch.reason or "liveness_failed")
             return
-        # Passed: a short lead-in to move from the challenge pose to the
-        # gesture's starting posture, then the recording (a hand must be up).
+        # Passed: the user starts the recording when ready (R / Space / button,
+        # i.e. auth_record), as at registration. Not started in time: cancelled,
+        # not counted as a failed attempt.
         with self._lock:
-            a["get_ready_until"] = time.time() + lv.GESTURE_LEAD_IN_SEC
-        while time.time() < a["get_ready_until"] and self.auth is a:
-            time.sleep(0.05)
+            a["ready_until"] = time.time() + lv.RECORD_READY_WINDOW_SEC
+        while self.auth is a and not a["go"].wait(0.05):
+            if time.time() >= a["ready_until"]:
+                with self._lock:
+                    if self.auth is a:
+                        a["phase"] = "ready"
+                        a["ready_until"] = None
+                        a["notice"] = "ready_timeout"
+                return
         if self.auth is not a:
             return
         end = time.time() + HAND_WAIT_AFTER_CHALLENGE_SEC
@@ -445,7 +458,7 @@ class WaveLockService:
         with self._lock:
             a["phase"] = "recording"
             a["rec"] = rec
-            a["get_ready_until"] = None
+            a["ready_until"] = None
         self._auth_worker(a, rec)
 
     def _liveness_failed(self, a, reason):
@@ -597,8 +610,9 @@ class WaveLockService:
             "locked_for": round(al.seconds_locked(a["username"], self.templates_dir), 1),
             "recording": self.camera.recording_progress() if a["phase"] == "recording" else None,
             "challenge": self.camera.challenge_state() if a["phase"] == "challenge" else None,
-            "get_ready": (round(max(0.0, a["get_ready_until"] - time.time()), 1)
-                          if a["phase"] == "challenge" and a.get("get_ready_until") else None),
+            "record_ready": (round(max(0.0, a["ready_until"] - time.time()), 1)
+                             if a["phase"] == "challenge" and a.get("ready_until") else None),
+            "notice": a.get("notice"),
             "liveness": self.liveness,
         }
         if self.debug:

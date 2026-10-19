@@ -64,6 +64,16 @@ def console_errors(d, label):
             problems.append(f"[{label}] console: {entry['message'][:300]}")
 
 
+def start_after_liveness(d, shot_name=None):
+    """The liveness check passes, then the user starts the recording (R)."""
+    wait_text(d, "Liveness passed", 40)
+    if shot_name:
+        shot(d, shot_name)
+    WebDriverWait(d, 20).until(EC.element_to_be_clickable(
+        (By.XPATH, "//button[contains(., 'Start recording') and not(@disabled)]")))
+    d.find_element(By.TAG_NAME, "body").send_keys("r")
+
+
 def shot(d, name):
     time.sleep(0.4)
     d.save_screenshot(os.path.join(OUT, f"{name}.png"))
@@ -200,13 +210,17 @@ def run(debug):
         app.tracker.play(tw.genuine_set(1, seed=31)[0])
         click(d, d.find_element(By.XPATH, "//button[contains(., 'Start recording')]"))
         time.sleep(0.5)
-        shot(d, f"{tag}_09_signin_recording")
+        shot(d, f"{tag}_09_signin_challenge")
+        start_after_liveness(d, f"{tag}_09b_signin_liveness_passed")
+        time.sleep(0.3)
+        shot(d, f"{tag}_09c_signin_recording")
         wait_text(d, "Access granted", 40)
         shot(d, f"{tag}_10_signin_granted")
         click(d, d.find_element(By.XPATH, "//button[contains(., 'Sign in again')]"))
         wait_text(d, "Start recording")
         app.tracker.play(WRONG_ORDER)
         d.find_element(By.TAG_NAME, "body").send_keys(" ")                # Space shortcut
+        start_after_liveness(d)
         wait_text(d, "Access denied", 40)
         body = d.find_element(By.TAG_NAME, "body").text
         if debug and "developer details" not in body.lower():
@@ -233,6 +247,7 @@ def run(debug):
         WebDriverWait(d, 20).until(EC.element_to_be_clickable(
             (By.XPATH, "//button[contains(., 'Start recording') and not(@disabled)]")))
         d.find_element(By.TAG_NAME, "body").send_keys("r")              # R = record
+        start_after_liveness(d)
         wait_text(d, "Access denied", 40)
         if debug:
             d.execute_script("window.scrollTo(0, document.body.scrollHeight)")

@@ -872,7 +872,17 @@ def test_liveness_challenge_logic():
     from utils import liveness as lv
     for n in range(5):
         assert lv.count_extended_fingers(finger_pose(n)) == n
-    assert lv.count_extended_fingers(None) is None
+        assert lv.count_shown_fingers(finger_pose(n), ASPECT) == n      # thumb folded
+    assert lv.count_extended_fingers(None) is None and lv.count_shown_fingers(None) is None
+    # all five fingers (thumb spread) are five, so they do not answer "show 4"
+    pose = _build_hand_frame({f: True for f in FINGERS})
+    five = np.array([0.5, 0.65, 0.0]) + pose * 0.18
+    five[:, 0] = 0.5 + pose[:, 0] * 0.18 / ASPECT
+    assert lv.thumb_extended(five, ASPECT) and lv.count_shown_fingers(five, ASPECT) == 5
+    ch = lv.Challenge([{"kind": "fingers", "count": 4}], now=0.0)
+    for k in range(20):
+        ch.feed_hand(lv.count_shown_fingers(five, ASPECT), 0.1 * k)
+    assert ch.state == "running" and ch.index == 0
     assert abs(lv.yaw_proxy(face_row(0.2)) - 0.2) < 1e-6 and lv.yaw_proxy(None) is None
 
     t = 100.0
@@ -974,6 +984,9 @@ def run_desktop_signin(tmp, gesture_raw, answer_challenge=True, timeout=None):
         keys["n"] += 1
         if keys["n"] == 5:
             return ord("r")
+        if "[LIVE] Passed" in out.getvalue() and not keys.get("go"):
+            keys["go"] = True                     # ready: start the gesture recording
+            return ord("r")
         if "ACCESS" in out.getvalue() or "LIVENESS CHECK FAILED" in out.getvalue():
             return ord("q")
         if keys["n"] > 3000:                        # safety net: never hang the suite
@@ -1034,7 +1047,7 @@ def test_desktop_signin_with_liveness():
         register(tmp)
         entry, text = run_desktop_signin(tmp, genuine_set(1, seed=31)[0])
         assert entry["granted"] is True, (entry, text[-800:])
-        assert "[LIVE] Passed. Get ready" in text and "[REC] Perform your gesture" in text
+        assert "[LIVE] Passed. Press [R] when you are ready" in text and "[REC] Perform your gesture" in text
         entry, text = run_desktop_signin(tmp, genuine_set(1, seed=31)[0],
                                          answer_challenge=False, timeout=1.5)
         assert entry["granted"] is False and entry["reason"] == "liveness_timeout_fingers", entry

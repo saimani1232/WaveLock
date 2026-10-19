@@ -116,6 +116,9 @@ export default {
       if (s.phase === "ready" && !(s.locked_for > 0) && cam && cam.live) {
         list.push({ keys: ["r", "space"], label: "Start recording", run: record });
       }
+      if (s.phase === "challenge" && s.record_ready != null && cam && cam.live) {
+        list.push({ keys: ["r", "space"], label: "Start the gesture recording", run: record });
+      }
       if (s.phase === "result" && s.result) {
         list.push({ keys: ["t"], label: s.result.granted ? "Sign in again" : "Try again", run: tryAgain });
         list.push({ keys: ["d"], label: "Done (back to the dashboard)", run: () => endSession(true) });
@@ -239,7 +242,7 @@ export default {
       const stateOf = (key) => {
         if (key === "liveness") {
           if (!s.liveness) return "off";
-          if (s.phase === "challenge") return s.get_ready != null ? "pass" : "active";
+          if (s.phase === "challenge") return s.record_ready != null ? "pass" : "active";
           if (s.phase === "result" && r && !r.too_few_frames) return r.liveness_failed ? "fail" : "pass";
           if (s.phase === "recording" || s.phase === "processing") return "pass";
           return "";
@@ -291,6 +294,9 @@ export default {
               h("p", { class: "small muted" }, `Too many failed attempts. Try again in ${fmtSeconds(s.locked_for)}.`))));
         } else {
           lockTotal = 0;
+          if (s.notice === "ready_timeout") {
+            add(action, notice("info", "info", "The liveness check passed, but the recording was not started within 20 s. Press R to start again (this did not count as a failed attempt)."));
+          }
           add(action, h("ol", { class: "tips" },
             h("li", null, "Face the camera so your face is visible."),
             h("li", null, "Show your hand until “Hand detected” appears."),
@@ -302,19 +308,23 @@ export default {
         }, icon("record"), cam && cam.live ? "Start recording" : "Waiting for the camera…",
           cam && cam.live && !(s.locked_for > 0) ? kbdHint("R") : null));
         cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked: wait for the timer" : "Ready: press R to record" });
-      } else if (s.phase === "challenge" && s.get_ready != null) {
-        add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("wave")),
-          h("div", null, h("h3", null, "Liveness passed: get ready"),
-            h("p", { class: "small muted" }, "Move your hand to where your gesture starts. The recording begins in a moment."))));
-        cam && cam.setMode("challenge", { getReady: s.get_ready });
+      } else if (s.phase === "challenge" && s.record_ready != null) {
+        add(action, h("div", { class: "decision" }, h("span", { class: "d-icon" }, icon("check")),
+          h("div", null, h("h3", null, "Liveness passed"),
+            h("p", { class: "small muted" }, "Put your hand where your gesture starts, then start the recording and perform your gesture as during registration. ",
+              `${Math.ceil(s.record_ready)} s left.`))));
+        add(action, h("button", {
+          class: "btn primary lg block", type: "button", "aria-keyshortcuts": "R Space", onclick: record,
+        }, icon("record"), "Start recording", kbdHint("R")));
+        cam && cam.setMode("challenge", { ready: s.record_ready });
       } else if (s.phase === "challenge" && s.challenge) {
         const ch = s.challenge, st = ch.steps[Math.min(ch.index, ch.steps.length - 1)];
         add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("liveness")),
           h("div", null, h("h3", null, "Liveness check"),
             h("p", { class: "small muted" }, st.kind === "fingers"
-              ? `Show ${st.count} finger${st.count === 1 ? "" : "s"} (index to pinky, no thumb) and hold still.`
+              ? `Show exactly ${st.count} finger${st.count === 1 ? "" : "s"} and hold still.`
               : `Turn your head ${st.direction === "left" ? "to the left" : "to the right"} a little, then look back.`,
-              " Then a short get-ready pause, and the gesture recording."))));
+              " Then you start the gesture recording when you are ready."))));
         cam && cam.setMode("challenge", { step: st, index: ch.index, total: ch.steps.length, remaining: ch.remaining });
       } else if (s.phase === "recording") {
         add(action, h("div", { class: "decision warn" }, h("span", { class: "d-icon" }, icon("wave")),
@@ -381,7 +391,7 @@ export default {
       const ch = s.challenge;
       const key = `${s.phase}|${s.attempt}|${s.error}|${Math.ceil(s.locked_for)}|${cam && cam.live}` +
         (ch ? `|${ch.index}|${Math.ceil(ch.remaining)}` : "") +
-        (s.get_ready != null ? `|ready${Math.ceil(s.get_ready)}` : "");
+        (s.record_ready != null ? `|ready${Math.ceil(s.record_ready)}` : "") + `|${s.notice || ""}`;
       if (key !== lastKey) { lastKey = key; render(s); }
       if (s.phase === "recording" && s.recording && cam) cam.setProgress(s.recording);
     });

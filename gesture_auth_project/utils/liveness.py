@@ -5,9 +5,12 @@ A printed photo or a pre-recorded video cannot react to an instruction that
 is chosen at random at the moment of sign-in. Before the gesture is recorded
 the user completes two short steps:
 
-  1. "Show N fingers"  - N drawn at random from 1..4 (index to pinky; the thumb
-     is left out because its tracking is the least reliable, the same reason
-     the transition gate skips it). The count must be held for HOLD_SEC.
+  1. "Show N fingers"  - N drawn at random from 1..4; all five fingers count,
+     so five fingers do not pass a request for four. Index to pinky use the
+     matcher's straight-finger rule; the thumb counts when its tip reaches
+     sideways beyond the index knuckle by more than THUMB_OUT_MIN palm widths
+     (on the 2710 real enrolment frames this measure is bimodal: folded about
+     -0.9..0.1, spread 0.6..1.3, 2 % in between). Held for HOLD_SEC.
   2. With a face enrolled: "Turn your head toward the arrow" (left or right at
      random). The cue is 3-D: when a real head turns, the nose tip moves
      sideways relative to the eye midpoint (yaw_proxy). A flat photo tilted
@@ -36,11 +39,13 @@ import numpy as np
 from utils.normalize import normalize_spatial
 
 CHALLENGE_TIMEOUT_SEC = 12.0
-# After a passed challenge the hand still shows the finger count. A short
-# lead-in lets the user move to the gesture's starting posture before the
-# recording starts (otherwise the transition is recorded as gesture).
-GESTURE_LEAD_IN_SEC = 1.5
-HAND_WAIT_AFTER_CHALLENGE_SEC = 3.0   # after the lead-in: time to raise the hand
+# After a passed challenge the user starts the gesture recording (R / Space /
+# button) when ready, as at registration, so the gesture starts at the same
+# moment of the recording window as the enrolment samples. Not started within
+# RECORD_READY_WINDOW_SEC: the attempt is cancelled (not counted as a failure).
+RECORD_READY_WINDOW_SEC = 20.0
+HAND_WAIT_AFTER_CHALLENGE_SEC = 3.0   # after the start: time to raise the hand
+THUMB_OUT_MIN = 0.40          # thumb tip beyond the index knuckle, in palm widths
 HOLD_SEC = 0.6                # finger count held continuously this long
 # Yaw proxy change needed for a head turn. Geometry: the nose tip sits about
 # 0.55 inter-eye distances in front of the eye plane, so a ~15 degree turn
@@ -81,6 +86,28 @@ def count_extended_fingers(landmarks):
         reaches_out = np.linalg.norm(frame[tip] - wrist) > np.linalg.norm(frame[pip] - wrist) * 1.02
         count += int(straight and reaches_out)
     return count
+
+
+def thumb_extended(landmarks, frame_aspect=4 / 3):
+    """True when the thumb tip reaches sideways beyond the index knuckle by
+    more than THUMB_OUT_MIN palm widths (axis: pinky knuckle -> index knuckle,
+    so it works for either hand and any in-plane rotation)."""
+    if landmarks is None:
+        return None
+    p = np.asarray(landmarks, dtype=np.float64)[:, :2] * [float(frame_aspect), 1.0]
+    across = p[5] - p[17]
+    width = float(np.linalg.norm(across))
+    if width < 1e-6:
+        return False
+    return float(np.dot(p[4] - p[5], across / width) / width) > THUMB_OUT_MIN
+
+
+def count_shown_fingers(landmarks, frame_aspect=4 / 3):
+    """Fingers shown for the liveness challenge: index..pinky plus the thumb (0-5)."""
+    n = count_extended_fingers(landmarks)
+    if n is None:
+        return None
+    return n + int(thumb_extended(landmarks, frame_aspect))
 
 
 def yaw_proxy(face_row):

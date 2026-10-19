@@ -289,7 +289,11 @@ def sign_in(app, username, raw, hide_hand=False):
         status, payload, _ = app.request("POST", "/api/auth/record")
         if status != 200:
             return status, payload
-        st = app.wait(lambda s: s["auth"]["phase"] in ("result", "ready"), what="decision")
+        st = app.wait(lambda s: s["auth"]["phase"] in ("result", "ready")
+                      or s["auth"].get("record_ready") is not None, what="decision")
+        if st["auth"].get("record_ready") is not None:     # liveness passed: start when ready
+            app.ok("POST", "/api/auth/record")
+            st = app.wait(lambda s: s["auth"]["phase"] in ("result", "ready"), what="decision")
     finally:
         app.tracker.hide_during_recording = False
     assert st["auth"]["error"] is None, st["auth"]["error"]
@@ -590,6 +594,10 @@ def test_slow_face_models_do_not_starve_the_recording():
             assert produced > SIM_FPS * 0.5, f"preview starved by face models: {produced:.1f} frames/s"
             app.tracker.play(tw.genuine_set(1, seed=31)[0])
             app.ok("POST", "/api/auth/record")
+            st = app.wait(lambda s: s["auth"]["phase"] == "result"
+                          or s["auth"].get("record_ready") is not None, what="liveness")
+            if st["auth"].get("record_ready") is not None:     # liveness passed: start when ready
+                app.ok("POST", "/api/auth/record")
             st = app.wait(lambda s: s["auth"]["phase"] == "result", what="attempt done")
             frames = st["auth"]["result"]["hand_frames"]
             expected = SIM_FPS * FAST_RECORDING_SEC
@@ -621,15 +629,31 @@ def test_liveness_challenge_flow():
                 try:
                     status, res = sign_in(app, "alice", genuine)
                     assert status == 200 and res["granted"], res
-                    # after the challenge, the get-ready lead-in is reported, then recording
+                    # after the challenge the user starts the recording when ready
                     app.ok("POST", "/api/auth/reset")
                     app.tracker.play(genuine)
                     app.ok("POST", "/api/auth/record")
-                    st = app.wait(lambda s: s["auth"]["get_ready"] is not None, what="get-ready")
+                    st = app.wait(lambda s: s["auth"]["record_ready"] is not None, what="ready")
                     assert st["auth"]["phase"] == "challenge", st["auth"]
-                    assert 0 <= st["auth"]["get_ready"] <= lv.GESTURE_LEAD_IN_SEC, st["auth"]
+                    assert 0 < st["auth"]["record_ready"] <= lv.RECORD_READY_WINDOW_SEC, st["auth"]
+                    time.sleep(1.0)                                   # nothing starts by itself
+                    assert app.ok("GET", "/api/status")["auth"]["phase"] == "challenge"
+                    app.ok("POST", "/api/auth/record")
                     st = app.wait(lambda s: s["auth"]["phase"] in ("result", "ready"), what="decision")
                     assert st["auth"]["result"]["granted"], st["auth"]["result"]
+                    # not started in time: back to ready, NOT counted as a failed attempt
+                    real_window = lv.RECORD_READY_WINDOW_SEC
+                    lv.RECORD_READY_WINDOW_SEC = 1.0
+                    try:
+                        app.ok("POST", "/api/auth/reset")
+                        log_before = len(app.ok("GET", "/api/activity")["entries"])
+                        app.ok("POST", "/api/auth/record")
+                        st = app.wait(lambda s: s["auth"]["phase"] == "ready"
+                                      and s["auth"]["notice"] == "ready_timeout", what="ready timeout")
+                        assert st["auth"]["result"] is None
+                        assert len(app.ok("GET", "/api/activity")["entries"]) == log_before
+                    finally:
+                        lv.RECORD_READY_WINDOW_SEC = real_window
                 finally:
                     gesture_auth.verify_face_over_frames = real
 

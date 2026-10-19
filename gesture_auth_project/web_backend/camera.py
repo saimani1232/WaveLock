@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from utils.landmarks import extract_landmarks
-from utils.liveness import count_extended_fingers, yaw_proxy
+from utils.liveness import count_shown_fingers, yaw_proxy
 from utils.face_auth import FACE_SAMPLE_GAP_SEC
 
 FACE_DETECT_INTERVAL_SEC = 0.25      # same throttle as gesture_auth.py's preview
@@ -390,7 +390,7 @@ class CameraService:
                     self._feed_recording(rec, now, landmarks, clean, w / h)
                 job = self._challenge
                 if job is not None:
-                    job.challenge.feed_hand(count_extended_fingers(landmarks), now)
+                    job.challenge.feed_hand(count_shown_fingers(landmarks, w / h), now)
                     job.challenge.tick(now)
                     self._finish_challenge_if_done(job)
 

@@ -246,12 +246,12 @@ export class CameraPanel {
     this.ringBar.setAttribute("stroke-dashoffset", mode === "granted" || mode === "denied" ? "0" : "100");
     void this.ringBar.getBoundingClientRect();        // apply before re-enabling the transition
     this.ringBar.style.transition = "";
-    if (mode === "challenge" && data.getReady != null) {
-      // Challenge passed: a moment to move into the gesture's starting posture.
+    if (mode === "challenge" && data.ready != null) {
+      // Challenge passed: the user starts the recording when ready (as at registration).
       add(this.center, h("div", { class: "cam-challenge" },
-        h("div", { class: "ch-big" }, h("b", null, String(Math.max(1, Math.ceil(data.getReady)))), icon("wave")),
-        h("strong", null, "Passed: get ready for your gesture"),
-        h("small", null, "Move your hand to where your gesture starts")));
+        h("div", { class: "ch-big" }, icon("check"), icon("wave")),
+        h("strong", null, "Passed: press R when you are ready"),
+        h("small", null, `Then perform your gesture as during registration · ${Math.ceil(data.ready)} s`)));
     } else if (mode === "challenge" && data.step) {
       // Liveness instruction, large and centred: a random request a photo or
       // a recorded video cannot follow.
@@ -260,7 +260,7 @@ export class CameraPanel {
         ? h("div", { class: "ch-big" }, h("b", null, String(st.count)), icon("hand"))
         : h("div", { class: "ch-big" }, icon(st.direction === "left" ? "arrowLeft" : "arrowRight"));
       const text = st.kind === "fingers"
-        ? `Show ${st.count} finger${st.count === 1 ? "" : "s"} (no thumb)`
+        ? `Show ${st.count} finger${st.count === 1 ? "" : "s"}`
         : `Turn your head ${st.direction === "left" ? "to the left" : "to the right"}, then back`;
       add(this.center, h("div", { class: "cam-challenge" }, big, h("strong", null, text),
         h("small", null, `Step ${data.index + 1} of ${data.total} · ${Math.ceil(data.remaining || 0)} s`)));
