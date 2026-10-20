@@ -1,0 +1,27 @@
+/* WaveLock mobile: additions to the web UI's app.css. */
+
+.camera canvas.feed { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* start-up screen while Python and the models load */
+.boot {
+  position: fixed; inset: 0; z-index: 1000; display: grid; place-content: center; justify-items: center;
+  gap: 12px; padding: 24px; text-align: center; background: var(--bg); color: var(--text);
+}
+.boot[hidden] { display: none; }
+.boot-mark { width: 64px; height: 64px; }
+.boot strong { font-size: 1.4rem; }
+.boot small { max-width: 34ch; color: var(--text-muted); line-height: 1.45; }
+
+/* settings switches */
+.switch-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  color: var(--text); font: inherit; text-align: left; cursor: pointer; min-height: 48px;
+}
+.switch-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* touch: comfortable targets and room for the phone's home indicator */
+@media (pointer: coarse) {
+  .btn, .icon-btn, .nav a { min-height: 44px; }
+  .view { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+}

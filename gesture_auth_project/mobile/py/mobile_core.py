@@ -119,16 +119,18 @@ class Core:
         return self.challenge.public(now)
 
     def challenge_feed(self, hand=None, frame_aspect=4 / 3, face_row=None,
-                       face_seen=False, now=None):
-        """One camera frame: hand landmarks (21 x 3, mirrored like the desktop
-        frames) and, when the face detector ran on this frame, its YuNet row
-        (or None for no face). Returns the state and the frame's |yaw|."""
+                       face_seen=False, now=None, hand_seen=True):
+        """One input of the challenge, as the desktop camera feeds it: a camera
+        frame's hand landmarks (21 x 3, mirrored like the desktop frames; None
+        = no hand) when hand_seen, and / or a face-detector result (YuNet row,
+        None = no face) when face_seen. Returns the state and the face |yaw|."""
         ch = self.challenge
         if ch is None:
             return None
         if ch.state == "running":
-            lm = None if hand is None else np.asarray(hand, dtype=np.float64)
-            ch.feed_hand(lv.count_shown_fingers(lm, frame_aspect), now)
+            if hand_seen:
+                lm = None if hand is None else np.asarray(hand, dtype=np.float64)
+                ch.feed_hand(lv.count_shown_fingers(lm, frame_aspect), now)
             yaw = None
             if face_seen:
                 yaw = lv.yaw_proxy(None if face_row is None else np.asarray(face_row, np.float64))

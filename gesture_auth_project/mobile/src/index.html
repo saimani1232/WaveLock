@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0b1118">
+  <meta name="description" content="WaveLock: hand-gesture and face sign-in that runs entirely on your phone.">
+  <title>WaveLock</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/mobile.css">
+  <script src="js/theme-init.js"></script>
+  <script type="module" src="js/sw-register.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#view">Skip to content</a>
+  <div id="boot" class="boot" role="status" aria-live="polite">
+    <img class="boot-mark" src="assets/logo.svg" alt="">
+    <strong>WaveLock</strong>
+    <div class="spinner"></div>
+    <span id="boot-text">Starting</span>
+    <small>Everything runs on this device. The first start downloads the matcher and models (about 70 MB); later starts use the browser cache.</small>
+  </div>
+  <div class="app">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#/dashboard" aria-label="WaveLock home">
+        <img class="brand-mark" src="assets/logo.svg" alt="">
+        <span class="brand-text">
+          <span class="brand-name">WaveLock</span>
+          <span class="brand-sub">Your hand is your password</span>
+        </span>
+      </a>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-foot" id="mode-badge"></div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="page-title">Dashboard</h1>
+          <p id="page-sub" class="muted"></p>
+        </div>
+        <div class="topbar-actions">
+          <span class="pill" id="camera-pill" role="status" aria-live="polite"></span>
+          <button class="icon-btn" id="theme-toggle" type="button" role="switch" aria-checked="true" aria-label="Dark mode"></button>
+        </div>
+      </header>
+      <main id="view" class="view" tabindex="-1"></main>
+    </div>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+  <div id="modal-root"></div>
+</body>
+</html>

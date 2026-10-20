@@ -6,15 +6,17 @@ Build the WaveLock mobile app (static files) into mobile/dist/.
     python build.py        # -> dist/  (deploy this folder; nothing else)
 
 What goes into dist/:
-  - the app (mobile/src) and the web UI views shared with web_app.py (web/),
+  - the app (mobile/src) and the web UI files shared with web_app.py (web/),
   - the desktop Python modules the phone runs in Pyodide (py/) - the same
     files as the desktop programs, plus mobile/py (glue and stand-ins),
   - Pyodide with numpy / scipy, MediaPipe Tasks Vision (web build) and
-    ONNX Runtime Web (vendor/), and the models (models/).
+    ONNX Runtime Web (vendor/), and the models (models/),
+  - sw.js (offline cache, versioned by the content) and vercel.json (headers).
 
 Downloads (Pyodide packages, the MediaPipe hand model) are checked against
 pinned SHA-256 hashes and cached in mobile/.cache/. No profile, recording,
-note or document is ever copied: only the paths listed below.
+note or document is ever copied: only the paths listed below, and
+check_dist() refuses to finish if anything else appears.
 """
 
 import hashlib
@@ -43,6 +45,51 @@ PY_MODULES = [
     "utils/landmarks.py", "utils/liveness.py", "utils/normalize.py", "utils/secure_store.py",
     "web_backend/__init__.py", "web_backend/service.py", "web_backend/camera.py",
 ]
+
+# Files of the web UI (web/) used unchanged by the mobile app.
+WEB_FILES = {
+    "css/app.css": "css/app.css",
+    "assets/logo.svg": "assets/logo.svg",
+    "js/app.js": "js/app.js",
+    "js/ui.js": "js/ui.js",
+    "js/brand.js": "js/brand.js",
+    "js/theme-init.js": "js/theme-init.js",
+    "js/camera.js": "js/camera_web.js",          # extended by mobile/src/js/camera.js
+    "js/views/dashboard.js": "js/views/dashboard.js",
+    "js/views/signin.js": "js/views/signin.js",
+    "js/views/register.js": "js/views/register.js",
+    "js/views/users.js": "js/views/users.js",
+}
+
+VENDOR_FILES = {
+    "@mediapipe/tasks-vision/vision_bundle.mjs": "mediapipe/vision_bundle.mjs",
+    "@mediapipe/tasks-vision/wasm/vision_wasm_internal.js": "mediapipe/wasm/vision_wasm_internal.js",
+    "@mediapipe/tasks-vision/wasm/vision_wasm_internal.wasm": "mediapipe/wasm/vision_wasm_internal.wasm",
+    "@mediapipe/tasks-vision/wasm/vision_wasm_nosimd_internal.js": "mediapipe/wasm/vision_wasm_nosimd_internal.js",
+    "@mediapipe/tasks-vision/wasm/vision_wasm_nosimd_internal.wasm": "mediapipe/wasm/vision_wasm_nosimd_internal.wasm",
+    "onnxruntime-web/dist/ort.wasm.min.mjs": "ort/ort.wasm.min.mjs",
+    "onnxruntime-web/dist/ort-wasm-simd-threaded.mjs": "ort/ort-wasm-simd-threaded.mjs",
+    "onnxruntime-web/dist/ort-wasm-simd-threaded.wasm": "ort/ort-wasm-simd-threaded.wasm",
+}
+
+# Models: the desktop's face models (gesture_auth_project/models) and the
+# official MediaPipe hand landmarker, all pinned by SHA-256.
+HAND_MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+                  "hand_landmarker/float16/1/hand_landmarker.task")
+MODELS = {
+    "hand_landmarker.task": ("url", HAND_MODEL_URL,
+                             "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1"),
+    "face_detection_yunet_2023mar.onnx": ("file", "models/face_detection_yunet_2023mar.onnx",
+                                          "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"),
+    "face_recognition_sface_2021dec.onnx": ("file", "models/face_recognition_sface_2021dec.onnx",
+                                            "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"),
+}
+
+# Only this site's own files and WebAssembly; no inline scripts or styles.
+CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; "
+       "connect-src 'self'; img-src 'self' data: blob:; style-src 'self'; "
+       "media-src 'self' blob: mediastream:; object-src 'none'; base-uri 'self'; "
+       "frame-ancestors 'none'; form-action 'self'")
 
 
 def sha256(path):
@@ -120,8 +167,97 @@ def python_sources(out_dir):
     return files
 
 
+# ---------------------------------------------------------------- app, vendor, models
+def app_files():
+    """The mobile shell, the shared web UI files and the mobile overrides."""
+    web = os.path.join(PROJECT, "web")
+    for src, dst in WEB_FILES.items():
+        copy(os.path.join(web, src), os.path.join(DIST, dst))
+    src_root = os.path.join(HERE, "src")
+    for root, _, names in os.walk(src_root):
+        for n in names:
+            if n == "sw.template.js":
+                continue
+            rel = os.path.relpath(os.path.join(root, n), src_root)
+            copy(os.path.join(root, n), os.path.join(DIST, rel))
+
+
+def vendor_files():
+    for src, dst in VENDOR_FILES.items():
+        path = os.path.join(NODE, *src.split("/"))
+        if not os.path.exists(path):
+            raise SystemExit(f"{src} missing: run `npm install` in mobile/ first.")
+        copy(path, os.path.join(DIST, "vendor", dst))
+
+
+def model_files():
+    for name, (kind, where, digest) in MODELS.items():
+        if kind == "url":
+            src = fetch(where, os.path.join(CACHE, "models", name), digest)
+        else:
+            src = os.path.join(PROJECT, where)
+            if sha256(src) != digest:
+                raise SystemExit(f"{where}: SHA-256 differs from the pinned model")
+        copy(src, os.path.join(DIST, "models", name))
+
+
+def service_worker_and_config():
+    """sw.js with a version derived from every built file, and vercel.json."""
+    h = hashlib.sha256()
+    shell = []
+    for root, dirs, names in os.walk(DIST):
+        dirs.sort()
+        for n in sorted(names):
+            path = os.path.join(root, n)
+            rel = os.path.relpath(path, DIST).replace(os.sep, "/")
+            if rel in ("sw.js", "vercel.json"):
+                continue
+            h.update(rel.encode())
+            h.update(sha256(path).encode())
+            if not rel.startswith(("vendor/", "models/")):
+                shell.append(rel)
+    version = h.hexdigest()[:12]
+    shell = ["./"] + sorted(shell)
+    tpl = open(os.path.join(HERE, "src", "sw.template.js"), encoding="utf-8").read()
+    with open(os.path.join(DIST, "sw.js"), "w", encoding="utf-8") as f:
+        f.write(tpl.replace("__VERSION__", version).replace("__SHELL__", json.dumps(shell, indent=1)))
+    config = {
+        "headers": [
+            {"source": "/(.*)", "headers": [
+                {"key": "Content-Security-Policy", "value": CSP},
+                {"key": "X-Content-Type-Options", "value": "nosniff"},
+                {"key": "Referrer-Policy", "value": "no-referrer"},
+                {"key": "Permissions-Policy", "value": "camera=(self), microphone=(), geolocation=()"},
+                {"key": "Cross-Origin-Opener-Policy", "value": "same-origin"},
+            ]},
+            {"source": "/sw.js", "headers": [{"key": "Cache-Control", "value": "no-cache"}]},
+            {"source": "/(vendor|models)/(.*)", "headers": [
+                {"key": "Cache-Control", "value": "public, max-age=86400"}]},
+        ],
+    }
+    with open(os.path.join(DIST, "vercel.json"), "w") as f:
+        json.dump(config, f, indent=2)
+    return version, len(shell)
+
+
+def check_dist():
+    """Nothing but the listed files: no profiles, recordings, notes or documents."""
+    bad = []
+    for root, _, names in os.walk(DIST):
+        for n in names:
+            rel = os.path.relpath(os.path.join(root, n), DIST).replace(os.sep, "/")
+            if (rel.startswith(("templates", "notes", "docs", "report"))
+                    or n.endswith((".npy", ".npz", ".docx", ".pdf", ".log"))
+                    or n in ("config.json", "CHANGES_SINCE_SEMESTER_1.md")):
+                bad.append(rel)
+    if bad:
+        raise SystemExit(f"refusing to build: unexpected files in dist/: {bad[:5]}")
+
+
 def main(argv):
-    only = set(argv) or {"python", "pyodide"}
+    only = set(argv) or {"clean", "python", "pyodide", "app", "vendor", "models"}
+    if "clean" in only and os.path.isdir(DIST):
+        shutil.rmtree(DIST)
     os.makedirs(DIST, exist_ok=True)
     if "python" in only:
         files = python_sources(os.path.join(DIST, "py"))
@@ -129,6 +265,19 @@ def main(argv):
     if "pyodide" in only:
         pkgs = pyodide_files(os.path.join(DIST, "vendor", "pyodide"))
         print(f"pyodide {PYODIDE_VERSION}: core + {', '.join(sorted(pkgs))}")
+    if "app" in only:
+        app_files()
+        print("app: shell, web UI files, mobile overrides")
+    if "vendor" in only:
+        vendor_files()
+        print("vendor: MediaPipe Tasks Vision, ONNX Runtime Web")
+    if "models" in only:
+        model_files()
+        print("models: hand landmarker, YuNet, SFace (SHA-256 checked)")
+    check_dist()
+    version, n = service_worker_and_config()
+    total = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(DIST) for f in fs)
+    print(f"dist/: version {version}, {n} shell files, {total / 1e6:.1f} MB in total")
 
 
 if __name__ == "__main__":
