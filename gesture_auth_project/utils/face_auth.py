@@ -190,6 +190,19 @@ def classify_face_score(score, threshold=SFACE_COSINE_THRESHOLD):
     return is_match, conf, failure_reason
 
 
+def face_sample_indices(n_frames, max_samples=6):
+    """Indices of the frames verify_face_over_frames samples (evenly spaced)."""
+    return np.linspace(0, n_frames - 1, min(max_samples, n_frames)).astype(int)
+
+
+def cosine_score(embedding_a, embedding_b):
+    """SFace cosine of two embeddings, as FaceRecognizerSF.match(FR_COSINE):
+    both are L2-normalised first."""
+    a = np.asarray(embedding_a, dtype=np.float64).ravel()
+    b = np.asarray(embedding_b, dtype=np.float64).ravel()
+    return float(np.dot(a / np.linalg.norm(a), b / np.linalg.norm(b)))
+
+
 def verify_face_over_frames(frames, enrolled_embedding, max_samples=6):
     """
     Verify identity across several frames of one authentication attempt.
@@ -207,26 +220,41 @@ def verify_face_over_frames(frames, enrolled_embedding, max_samples=6):
     """
     n_frames = len(frames) if frames is not None else 0
     if n_frames == 0:
+        return decide_face_over_samples([])
+    indices = face_sample_indices(n_frames, max_samples)
+    results = [verify_face(frames[i], enrolled_embedding) for i in indices]
+    return decide_face_over_samples(
+        [(r[0], r[1]) if r[3] is not None else None for r in results])
+
+
+def decide_face_over_samples(samples):
+    """
+    The decision of verify_face_over_frames from its sampled frames.
+
+    Args:
+        samples: one entry per sampled frame: (is_match, cosine) from
+            verify_face / classify_face_score, or None when no face was
+            found. Shared with the mobile app, which computes the cosines
+            in the browser.
+    """
+    if not samples:
         return {"match": False, "score": 0.0, "confidence": 0.0,
                 "reason": "no_face_detected", "frames_checked": 0,
                 "faces_detected": 0}
-
-    indices = np.linspace(0, n_frames - 1, min(max_samples, n_frames)).astype(int)
-    results = [verify_face(frames[i], enrolled_embedding) for i in indices]
-    detected = [r for r in results if r[3] is not None]
+    detected = [s for s in samples if s is not None]
     if not detected:
         return {"match": False, "score": 0.0, "confidence": 0.0,
-                "reason": "no_face_detected", "frames_checked": len(indices),
+                "reason": "no_face_detected", "frames_checked": len(samples),
                 "faces_detected": 0}
 
-    required = (len(indices) + 1) // 2          # majority of sampled frames
-    median_score = float(np.median([r[1] for r in detected]))
+    required = (len(samples) + 1) // 2          # majority of sampled frames
+    median_score = float(np.median([s[1] for s in detected]))
     if len(detected) < required:
         return {"match": False, "score": median_score, "confidence": 0.0,
                 "reason": "insufficient_face_frames",
-                "frames_checked": len(indices), "faces_detected": len(detected)}
+                "frames_checked": len(samples), "faces_detected": len(detected)}
 
-    n_pass = sum(1 for r in detected if r[0])
+    n_pass = sum(1 for s in detected if s[0])
     majority = n_pass >= required
     median_ok, confidence, tier_reason = classify_face_score(median_score)
     match = bool(majority and median_ok)
@@ -240,7 +268,7 @@ def verify_face_over_frames(frames, enrolled_embedding, max_samples=6):
         reason = tier_reason
 
     return {"match": match, "score": median_score, "confidence": confidence,
-            "reason": reason, "frames_checked": len(indices),
+            "reason": reason, "frames_checked": len(samples),
             "faces_detected": len(detected)}
 
 
