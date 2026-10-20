@@ -3,9 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "description": "WaveLock on-device mobile app (PWA): build tooling only; the app is static files.",
+  "type": "module",
   "scripts": {
     "build": "python build.py",
-    "test:pyodide": "node tests/pyodide_core.mjs"
+    "test:pyodide": "node tests/pyodide_core.mjs",
+    "test:face": "node tests/face_parity.mjs .cache/testdata/astronaut.png"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "0.10.35",
