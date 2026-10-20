@@ -11,6 +11,8 @@ recording timing, liveness challenge, Python (Pyodide) decisions, IndexedDB
 storage, and the pages, driven with keys and clicks.
 
     cd gesture_auth_project/mobile && python build.py && python tests/e2e_mobile.py [shots_dir]
+
+Against a deployed copy instead of dist/: set WAVELOCK_URL (e.g. the Vercel URL).
 """
 import json
 import os
@@ -83,10 +85,15 @@ import('/js/api.js').then(({ service }) => {
 
 def main():
     shots = sys.argv[1] if len(sys.argv) > 1 else None
-    srv = make_server(0)
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    base = f"http://localhost:{port}/"
+    srv = None
+    base = os.environ.get("WAVELOCK_URL")
+    if base:
+        base = base.rstrip("/") + "/"
+    else:
+        srv = make_server(0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://localhost:{srv.server_address[1]}/"
+    print(f"testing {base}", flush=True)
     o = webdriver.ChromeOptions()
     for a in ("--headless=new", "--window-size=390,844", "--use-fake-ui-for-media-stream",
               "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"):
@@ -224,7 +231,8 @@ def main():
         check(not problems, "no console errors or CSP violations" + (f": {problems[:3]}" if problems else ""))
     finally:
         d.quit()
-        srv.shutdown()
+        if srv:
+            srv.shutdown()
     print("ALL PASSED" if not failures else f"{len(failures)} FAILED")
     return 1 if failures else 0
 
