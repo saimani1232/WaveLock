@@ -8,7 +8,7 @@
   gap: 12px; padding: 24px; text-align: center; background: var(--bg); color: var(--text);
 }
 .boot[hidden] { display: none; }
-.boot-mark { width: 64px; height: 64px; }
+.boot-mark { width: 96px; height: 96px; border-radius: 22px; box-shadow: 0 0 40px rgba(60, 150, 255, .25); }
 .boot strong { font-size: 1.4rem; }
 .boot small { max-width: 34ch; color: var(--text-muted); line-height: 1.45; }
 
@@ -64,7 +64,7 @@
     color: var(--text-muted); font-family: var(--font-display); font-weight: 700; font-size: 13px; letter-spacing: .02em;
   }
   .mobile-brand:hover { text-decoration: none; }
-  .mobile-brand img { width: 22px; height: 22px; }
+  .mobile-brand img { width: 26px; height: 26px; }
   .topbar h1 { font-size: 21px; }
   .view { padding-top: 12px; }
   .toasts { left: 16px; right: 16px; bottom: calc(80px + env(safe-area-inset-bottom)); max-width: none; }
@@ -76,3 +76,7 @@
   .hint-line, .kbd { display: none; }
   .cam-actions .btn { flex: 1 1 0; justify-content: center; min-height: 52px; }
 }
+
+/* the logo image is square with its own dark background */
+.brand-mark { border-radius: 10px; }
+.mobile-brand img { border-radius: 6px; }
