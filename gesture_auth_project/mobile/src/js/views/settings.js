@@ -35,11 +35,12 @@ export default {
     const camSeg = h("div", { class: "segmented", role: "group", "aria-label": "Camera" });
     for (const [value, label] of [["user", "Front (selfie)"], ["environment", "Back"]]) {
       camSeg.append(h("button", { type: "button", "aria-pressed": String(mob.facing === value), onclick: async (e) => {
+        const btn = e.currentTarget;            // null after the first await
         try {
           await api.setOptions({ facing: value });
           await api.cameraStop();
           for (const b of camSeg.children) b.setAttribute("aria-pressed", "false");
-          e.currentTarget.setAttribute("aria-pressed", "true");
+          btn.setAttribute("aria-pressed", "true");
           toast(value === "user" ? "The front camera will be used." : "The back camera will be used.", "ok");
           app.poll();
         } catch (ex) { toast(ex.message, "warn"); }

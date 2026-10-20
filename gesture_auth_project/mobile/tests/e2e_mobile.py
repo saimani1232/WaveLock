@@ -124,6 +124,13 @@ def main():
     def key(k):
         d.find_element(By.TAG_NAME, "body").send_keys(k)
 
+    def tap(el):
+        """Bring the element to the middle of the screen (clear of the fixed
+        top and bottom bars, as a person scrolls), then click it."""
+        d.execute_script("arguments[0].scrollIntoView({block: 'center'})", el)
+        time.sleep(0.2)
+        el.click()
+
     def boot():
         end = time.time() + 180
         while time.time() < end:
@@ -141,7 +148,7 @@ def main():
         d.get(base + "#/register")
         check(wait_text("Create a profile", 30), "register page")
         js("document.getElementById('reg-user').value = 'alice'")
-        d.find_element(By.CSS_SELECTOR, "form button[type=submit]").click()
+        tap(d.find_element(By.CSS_SELECTOR, "form button[type=submit]"))
         check(wait_text("Skip (gesture only)", 60), "face step shown")
         end = time.time() + 60
         while time.time() < end and js("return (window.__cam = window.__cam || 0), true") and \
@@ -166,7 +173,17 @@ def main():
                 break
             if st["a"]:
                 js("window.__wl.mode = 'enrol' + arguments[0]", min(4, st["acc"]))
-                key("r")
+                bar = d.find_elements(By.CSS_SELECTOR, ".cam-actions .btn.primary")
+                if samples == 0:
+                    check(bool(bar) and bar[0].is_displayed() and "Record sample" in bar[0].text,
+                          "action bar under the camera mirrors 'Record sample'")
+                    geo = js("const c = document.querySelector('.camera').getBoundingClientRect();"
+                             "const b = document.querySelector('.cam-actions').getBoundingClientRect();"
+                             "return {gap: b.top - c.bottom, bottom: b.bottom, vh: window.innerHeight};")
+                    check(0 <= geo["gap"] < 80 and geo["bottom"] <= geo["vh"],
+                          f"action bar directly below the camera and on screen ({geo})")
+                    shot("01b_register_action_bar")
+                tap(bar[0]) if bar and bar[0].is_enabled() else key("r")
                 samples += 1
                 time.sleep(0.6)
             time.sleep(0.2)
@@ -176,16 +193,21 @@ def main():
         # sign-in: liveness (answered by the synthetic hand), then start with R
         d.get(base + "#/signin?user=alice")
         check(wait_text("Your hand is your password", 30), "sign-in page")
-        d.find_element(By.CSS_SELECTOR, "form button[type=submit]").click()
+        tap(d.find_element(By.CSS_SELECTOR, "form button[type=submit]"))
         check(wait_text("Start recording", 30), "sign-in session")
         time.sleep(1.5)
         js("window.__wl.mode = 'genuine'; window.__wl.answer = true")
-        key("r")
+        bar = d.find_elements(By.CSS_SELECTOR, ".cam-actions .btn.primary")
+        check(bool(bar) and "Start recording" in bar[0].text, "action bar mirrors 'Start recording'")
+        tap(bar[0])
         check(wait_text("Liveness passed", 30), "liveness challenge passed (finger counts)")
         shot("03_liveness_passed")
         time.sleep(1.0)
         check("Liveness passed" in body(), "nothing starts by itself after the challenge")
-        key("r")
+        bar = d.find_elements(By.CSS_SELECTOR, ".cam-actions .btn.primary")
+        check(bool(bar) and "Start recording" in bar[0].text and bar[0].is_enabled(),
+              "after the challenge the action bar offers 'Start recording'")
+        tap(bar[0])
         check(wait_text("Access granted", 90), "genuine gesture: access granted")
         shot("04_granted")
 
@@ -224,6 +246,19 @@ def main():
         shot("08_security")
         d.get(base + "#/settings")
         check(wait_text("Developer mode", 30), "settings page")
+        for label in ("Back", "Front (selfie)"):
+            btn = d.find_element(By.XPATH, f"//button[contains(., '{label}')]")
+            tap(btn)
+            time.sleep(1.0)
+            check(btn.get_attribute("aria-pressed") == "true" and "Cannot read properties" not in body(),
+                  f"settings: camera '{label}' selected without an error")
+        nav = js("const n = document.querySelector('.sidebar').getBoundingClientRect();"
+                 "return {top: n.top, bottom: n.bottom, vh: window.innerHeight,"
+                 " labels: [...document.querySelectorAll('#nav a span')].map(s => s.offsetParent !== null)}")
+        check(nav["bottom"] >= nav["vh"] - 1 and nav["top"] > nav["vh"] / 2 and all(nav["labels"]),
+              "navigation is a bottom tab bar with labels")
+        check(js("const b = document.querySelector('.mobile-brand'); return !!b && b.offsetParent !== null"),
+              "top bar shows the WaveLock brand")
         shot("09_settings")
 
         problems = [e["message"][:200] for e in d.get_log("browser")
