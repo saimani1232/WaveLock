@@ -206,7 +206,7 @@ def service_worker_and_config():
     h = hashlib.sha256()
     shell = []
     for root, dirs, names in os.walk(DIST):
-        dirs.sort()
+        dirs[:] = sorted(x for x in dirs if x != ".vercel")     # not part of the app
         for n in sorted(names):
             path = os.path.join(root, n)
             rel = os.path.relpath(path, DIST).replace(os.sep, "/")
@@ -257,7 +257,11 @@ def check_dist():
 def main(argv):
     only = set(argv) or {"clean", "python", "pyodide", "app", "vendor", "models"}
     if "clean" in only and os.path.isdir(DIST):
-        shutil.rmtree(DIST)
+        for entry in os.listdir(DIST):
+            if entry == ".vercel":              # keep the Vercel project link
+                continue
+            path = os.path.join(DIST, entry)
+            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
     os.makedirs(DIST, exist_ok=True)
     if "python" in only:
         files = python_sources(os.path.join(DIST, "py"))

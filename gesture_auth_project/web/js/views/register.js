@@ -226,7 +226,7 @@ export default {
       const c = ensureCam(false);
       const recording = r.phase === "recording";
       c.setCoach({ needHand: true, needFace: false,
-        text: r.awaiting_record ? `Ready: press R to record sample ${Math.min(r.current_sample, r.samples_required)}` : "Please wait" });
+        text: r.awaiting_record ? `Ready to record sample ${Math.min(r.current_sample, r.samples_required)}` : "Please wait" });
       if (recording) c.setMode("recording", r.recording || {});
       else if (r.phase === "checking") c.setMode("processing", { text: "Checking consistency…" });
       else c.setMode("idle");

@@ -24,4 +24,6 @@
 @media (pointer: coarse) {
   .btn, .icon-btn, .nav a { min-height: 44px; }
   .view { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+  /* no keyboard on a phone: hide the key hints (the buttons do the same) */
+  .hint-line, .kbd { display: none; }
 }

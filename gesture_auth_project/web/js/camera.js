@@ -250,7 +250,7 @@ export class CameraPanel {
       // Challenge passed: the user starts the recording when ready (as at registration).
       add(this.center, h("div", { class: "cam-challenge" },
         h("div", { class: "ch-big" }, icon("check"), icon("wave")),
-        h("strong", null, "Passed: press R when you are ready"),
+        h("strong", null, "Passed: start the recording when you are ready"),
         h("small", null, `Then perform your gesture as during registration · ${Math.ceil(data.ready)} s`)));
     } else if (mode === "challenge" && data.step) {
       // Liveness instruction, large and centred: a random request a photo or

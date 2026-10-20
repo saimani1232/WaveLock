@@ -296,13 +296,13 @@ export default {
         } else {
           lockTotal = 0;
           if (s.notice === "ready_timeout") {
-            add(action, notice("info", "info", "The liveness check passed, but the recording was not started within 20 s. Press R to start again (this did not count as a failed attempt)."));
+            add(action, notice("info", "info", "The liveness check passed, but the recording was not started within 20 s. Start again (this did not count as a failed attempt)."));
           }
           add(action, h("ol", { class: "tips" },
             h("li", null, "Face the camera so your face is visible."),
             h("li", null, "Show your hand until “Hand detected” appears."),
             h("li", null, s.liveness
-              ? "Press R, follow the liveness instruction, then press R again and perform your gesture as during registration."
+              ? "Start, follow the liveness instruction, then start the recording and perform your gesture as during registration."
               : "Start recording and perform your gesture at your normal speed.")));
         }
         add(action, h("button", {
@@ -310,7 +310,7 @@ export default {
           disabled: s.locked_for > 0 || !(cam && cam.live), onclick: record,
         }, icon("record"), cam && cam.live ? "Start recording" : "Waiting for the camera…",
           cam && cam.live && !(s.locked_for > 0) ? kbdHint("R") : null));
-        cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked: wait for the timer" : "Ready: press R to record" });
+        cam && cam.setMode("idle", { hint: s.locked_for > 0 ? "Locked: wait for the timer" : "Ready to record" });
       } else if (s.phase === "challenge" && s.record_ready != null) {
         add(action, h("div", { class: "decision" }, h("span", { class: "d-icon" }, icon("check")),
           h("div", null, h("h3", null, "Liveness passed"),

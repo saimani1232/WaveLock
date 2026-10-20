@@ -144,18 +144,21 @@ export class CameraService {
   }
 
   // ---------------------------------------------------------------- frames
+  // requestAnimationFrame, processing a frame only when the video has moved on
+  // (requestVideoFrameCallback stops firing for a <video> that is not on the
+  // page in Chrome, and is not dependable on every phone browser).
   _loop(token) {
-    const next = () => {
-      if (token !== this.loopToken) return;
-      if (this.video.requestVideoFrameCallback) this.video.requestVideoFrameCallback(step);
-      else requestAnimationFrame(step);
-    };
+    let lastTime = -1;
     const step = () => {
       if (token !== this.loopToken) return;
-      try { this._frame(); } catch (e) { console.error(e); }
-      next();
+      const t = this.video.currentTime;
+      if (this.video.readyState >= 2 && t !== lastTime) {
+        lastTime = t;
+        try { this._frame(); } catch (e) { console.error(e); }
+      }
+      requestAnimationFrame(step);
     };
-    next();
+    requestAnimationFrame(step);
   }
 
   _frame() {
