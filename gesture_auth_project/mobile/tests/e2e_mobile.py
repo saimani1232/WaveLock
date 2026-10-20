@@ -129,6 +129,21 @@ def main():
         top and bottom bars, as a person scrolls), then click it."""
         d.execute_script("arguments[0].scrollIntoView({block: 'center'})", el)
         time.sleep(0.2)
+        for attempt in range(10):
+            try:
+                el.click()
+                return
+            except Exception as e:                    # something on top (e.g. a toast)
+                if "intercepted" not in str(e):
+                    raise
+                what = d.execute_script(
+                    "const b = arguments[0].getBoundingClientRect();"
+                    "const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);"
+                    "return t ? (t.outerHTML || '').slice(0, 300) : null;", el)
+                print(f"      tap blocked ({attempt + 1}): {what}", flush=True)
+                if attempt == 0:
+                    shot("tap_blocked")
+                time.sleep(1.0)
         el.click()
 
     def boot():
